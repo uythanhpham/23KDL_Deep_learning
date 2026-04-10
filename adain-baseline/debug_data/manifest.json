@@ -2,8 +2,8 @@
   "mode": "debug",
   "image_size": 256,
   "seed": 42,
-  "num_content": 20,
-  "num_style": 20,
+  "num_content": 12,
+  "num_style": 12,
   "content_dir": "debug_data\\content",
   "style_dir": "debug_data\\style",
   "content_files": [
@@ -18,15 +18,7 @@
     "debug_data\\content\\content_0008.png",
     "debug_data\\content\\content_0009.png",
     "debug_data\\content\\content_0010.png",
-    "debug_data\\content\\content_0011.png",
-    "debug_data\\content\\content_0012.png",
-    "debug_data\\content\\content_0013.png",
-    "debug_data\\content\\content_0014.png",
-    "debug_data\\content\\content_0015.png",
-    "debug_data\\content\\content_0016.png",
-    "debug_data\\content\\content_0017.png",
-    "debug_data\\content\\content_0018.png",
-    "debug_data\\content\\content_0019.png"
+    "debug_data\\content\\content_0011.png"
   ],
   "style_files": [
     "debug_data\\style\\style_0000.png",
@@ -40,15 +32,7 @@
     "debug_data\\style\\style_0008.png",
     "debug_data\\style\\style_0009.png",
     "debug_data\\style\\style_0010.png",
-    "debug_data\\style\\style_0011.png",
-    "debug_data\\style\\style_0012.png",
-    "debug_data\\style\\style_0013.png",
-    "debug_data\\style\\style_0014.png",
-    "debug_data\\style\\style_0015.png",
-    "debug_data\\style\\style_0016.png",
-    "debug_data\\style\\style_0017.png",
-    "debug_data\\style\\style_0018.png",
-    "debug_data\\style\\style_0019.png"
+    "debug_data\\style\\style_0011.png"
   ],
   "notes": "Dummy RGB images for early smoke test. Used to unblock model/train/infer pipeline in phase 0."
 }
