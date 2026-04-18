@@ -1,3 +1,4 @@
+:: E:\Nam3_ki2\TH DL\PROJECT\23KDL_Deep_learning\adain-baseline\scripts\01_prepare_data.bat
 @echo off
 setlocal
 
@@ -7,6 +8,7 @@ echo ==============================================
 
 cd /d "%~dp0.."
 
+:: CHỈNH THAM SỐ TẠO ẢNH CHỖ NÀY NHA!!!!!!!!!!!!!!!!!!!!!!!!!
 if "%PYTHON_BIN%"=="" set PYTHON_BIN=python
 if "%OUTPUT_DIR%"=="" set OUTPUT_DIR=debug_data
 if "%IMAGE_SIZE%"=="" set IMAGE_SIZE=256
@@ -14,6 +16,7 @@ if "%NUM_CONTENT%"=="" set NUM_CONTENT=12
 if "%NUM_STYLE%"=="" set NUM_STYLE=12
 if "%SEED%"=="" set SEED=42
 if "%IMAGE_FORMAT%"=="" set IMAGE_FORMAT=png
+::_________________________________________________________
 
 echo Project root : %cd%
 echo Python bin   : %PYTHON_BIN%

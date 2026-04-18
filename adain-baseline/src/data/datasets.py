@@ -1,4 +1,5 @@
 """Biến ảnh trong processed thành tensor."""
+# E:\Nam3_ki2\TH DL\PROJECT\23KDL_Deep_learning\adain-baseline\src\data\datasets.py
 import argparse
 import json
 import random
