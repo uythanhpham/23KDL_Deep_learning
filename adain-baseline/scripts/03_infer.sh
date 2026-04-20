@@ -13,9 +13,9 @@ set -e
 # --- CẤU HÌNH ĐƯỜNG DẪN ---
 CONFIG_FILE="configs/config.yaml"
 CHECKPOINT="checkpoints/mock.pth"
-CONTENT_DIR="debug_data/content"
-STYLE_DIR="debug_data/style"
-OUTPUT_DIR="outputs/infer_smoke"
+CONTENT_DIR="data/processed/test/content"
+STYLE_DIR="data/processed/test/style_anime"
+OUTPUT_DIR="outputs/infer_final_anime"
 
 # --- LỆNH CHẠY ---
 python -m src.infer \
