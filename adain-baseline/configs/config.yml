@@ -10,9 +10,12 @@ shuffle: true
 
 lr: 0.0001
 lambda_style: 10.0
-epochs: 5
+epochs: 50
 log_every: 10
 
 save_dir: "/content/drive/MyDrive/Năm 3 kì 2/TH DL/project/AdaIn/checkpoints"
 
 seed: 42
+
+early_stopping: true
+rise_patience: 3

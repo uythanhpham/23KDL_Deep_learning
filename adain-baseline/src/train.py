@@ -6,11 +6,14 @@ Chức năng:
 - Parse --config
 - Đọc config.yaml
 - Hỗ trợ mode = debug | real
-- Tạo dataset / dataloader
+- Build train/val dataset riêng
+- Tạo dataloader
 - Khởi tạo model / optimizer / trainer
 - Train theo epoch
-- Log loss
-- Save checkpoint vào save_dir (mặc định Kaggle-friendly)
+- Validation theo epoch
+- Log train/val loss
+- Save checkpoint vào save_dir
+- Hỗ trợ early stopping khi val loss tăng liên tiếp
 
 Ví dụ:
     python -m src.train --config configs/config.yaml
@@ -70,7 +73,7 @@ def get_device() -> torch.device:
 
 
 def resolve_save_dir(cfg: Dict[str, Any]) -> Path:
-    save_dir = cfg.get("save_dir", "/content/drive/MyDrive/Nam3_ki_2/TH_DL/project/AdaIn/checkpoints")
+    save_dir = cfg.get("save_dir", "/kaggle/working/checkpoints")
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     return save_dir
@@ -94,20 +97,7 @@ def save_json(data: Dict[str, Any], path: Path) -> None:
 # ---------------------------------------------------------
 # Dataset / Dataloader factory
 # ---------------------------------------------------------
-def build_dataset_from_config(cfg: Dict[str, Any]):
-    """
-    Tạo dataset dựa trên mode trong config.
-
-    Hỗ trợ:
-    - mode = "debug" -> build_debug_dataset(...)
-    - mode = "real"  -> build_real_dataset(...) hoặc build_dataset(...)
-
-    Kỳ vọng các builder ở src.data.datasets có chữ ký gần giống:
-    - build_debug_dataset(root_dir=..., image_size=..., ...)
-    - build_real_dataset(real_root_dir=..., split=..., style_domain=..., image_size=..., ...)
-      hoặc
-    - build_dataset(mode=..., root_dir=..., split=..., style_domain=..., image_size=..., ...)
-    """
+def build_dataset_for_split(cfg: Dict[str, Any], split: str):
     mode = str(get_optional(cfg, "mode", "real")).strip().lower()
     image_size = int(get_optional(cfg, "image_size", 256))
 
@@ -119,46 +109,40 @@ def build_dataset_from_config(cfg: Dict[str, Any]):
                 "Không tìm thấy hàm build_debug_dataset trong src.data.datasets"
             )
 
-        dataset = datasets_module.build_debug_dataset(
+        return datasets_module.build_debug_dataset(
             root_dir=root_dir,
             image_size=image_size,
         )
-        return dataset
 
     if mode == "real":
         real_root_dir = get_required(cfg, "real_root_dir")
-        split = str(get_optional(cfg, "split", "train"))
         style_domain = get_optional(cfg, "style_domain", None)
 
         if hasattr(datasets_module, "build_real_dataset"):
-            dataset = datasets_module.build_real_dataset(
+            return datasets_module.build_real_dataset(
                 real_root_dir=real_root_dir,
                 split=split,
                 style_domain=style_domain,
                 image_size=image_size,
             )
-            return dataset
 
         if hasattr(datasets_module, "build_dataset"):
-            dataset = datasets_module.build_dataset(
+            return datasets_module.build_dataset(
                 mode=mode,
                 root_dir=real_root_dir,
                 split=split,
                 style_domain=style_domain,
                 image_size=image_size,
             )
-            return dataset
 
         raise AttributeError(
             "Không tìm thấy build_real_dataset hoặc build_dataset trong src.data.datasets"
         )
 
-    raise ValueError(
-        f"mode không hợp lệ: '{mode}'. Chỉ chấp nhận 'debug' hoặc 'real'."
-    )
+    raise ValueError(f"mode không hợp lệ: '{mode}'")
 
 
-def build_dataloader_from_config(dataset, cfg: Dict[str, Any]):
+def build_dataloader_for_split(dataset, cfg: Dict[str, Any], split: str):
     if not hasattr(datasets_module, "build_dataloader"):
         raise AttributeError(
             "Không tìm thấy hàm build_dataloader trong src.data.datasets"
@@ -166,15 +150,14 @@ def build_dataloader_from_config(dataset, cfg: Dict[str, Any]):
 
     batch_size = int(get_optional(cfg, "batch_size", 8))
     num_workers = int(get_optional(cfg, "num_workers", 2))
-    shuffle = bool(get_optional(cfg, "shuffle", True))
+    shuffle = True if split == "train" else False
 
-    dataloader = datasets_module.build_dataloader(
+    return datasets_module.build_dataloader(
         dataset=dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
     )
-    return dataloader
 
 
 # ---------------------------------------------------------
@@ -239,22 +222,38 @@ def main() -> None:
 
     save_json(cfg, save_dir / "resolved_config.json")
 
-    dataset = build_dataset_from_config(cfg)
-    dataloader = build_dataloader_from_config(dataset, cfg)
+    # Build train / val
+    train_dataset = build_dataset_for_split(cfg, split="train")
+    val_dataset = build_dataset_for_split(cfg, split="val")
 
-    if len(dataset) == 0:
-        raise RuntimeError("Dataset rỗng. Hãy kiểm tra lại dữ liệu đầu vào.")
+    train_dataloader = build_dataloader_for_split(train_dataset, cfg, split="train")
+    val_dataloader = build_dataloader_for_split(val_dataset, cfg, split="val")
 
-    print(f"[INFO] Dataset size     : {len(dataset)}")
-    print(f"[INFO] Num batches      : {len(dataloader)}")
-    print(f"[INFO] Batch size       : {get_optional(cfg, 'batch_size', 8)}")
-    print(f"[INFO] Image size       : {get_optional(cfg, 'image_size', 256)}")
+    if len(train_dataset) == 0:
+        raise RuntimeError("Train dataset rỗng. Hãy kiểm tra lại dữ liệu đầu vào.")
 
+    if len(val_dataset) == 0:
+        raise RuntimeError("Val dataset rỗng. Hãy kiểm tra lại dữ liệu đầu vào.")
+
+    print(f"[INFO] Train dataset size : {len(train_dataset)}")
+    print(f"[INFO] Val dataset size   : {len(val_dataset)}")
+    print(f"[INFO] Train batches      : {len(train_dataloader)}")
+    print(f"[INFO] Val batches        : {len(val_dataloader)}")
+    print(f"[INFO] Batch size         : {get_optional(cfg, 'batch_size', 8)}")
+    print(f"[INFO] Image size         : {get_optional(cfg, 'image_size', 256)}")
+
+    # Model / optimizer / trainer
     model = AdaINStyleTransfer().to(device)
 
     lr = float(get_optional(cfg, "lr", 1e-4))
     lambda_style = float(get_optional(cfg, "lambda_style", 10.0))
     epochs = int(get_optional(cfg, "epochs", 5))
+
+    use_early_stopping = bool(get_optional(cfg, "early_stopping", False))
+    rise_patience = int(get_optional(cfg, "rise_patience", 3))
+
+    prev_val_loss = None
+    rise_counter = 0
 
     optimizer = Adam(model.decoder.parameters(), lr=lr)
 
@@ -266,9 +265,12 @@ def main() -> None:
     )
 
     history: Dict[str, Any] = {
-        "epoch_losses": [],
-        "epoch_content_losses": [],
-        "epoch_style_losses": [],
+        "train_epoch_losses": [],
+        "train_epoch_content_losses": [],
+        "train_epoch_style_losses": [],
+        "val_epoch_losses": [],
+        "val_epoch_content_losses": [],
+        "val_epoch_style_losses": [],
         "epochs": epochs,
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -285,7 +287,10 @@ def main() -> None:
 
         epoch_start_time = time.time()
 
-        for batch_idx, batch in enumerate(dataloader, start=1):
+        # =====================
+        # TRAIN
+        # =====================
+        for batch_idx, batch in enumerate(train_dataloader, start=1):
             if "content" not in batch or "style" not in batch:
                 raise KeyError(
                     "Batch phải chứa key 'content' và 'style'. "
@@ -306,35 +311,79 @@ def main() -> None:
             epoch_style_loss += style_loss
 
             log_every = int(get_optional(cfg, "log_every", 10))
-            if batch_idx % log_every == 0 or batch_idx == len(dataloader):
+            if batch_idx % log_every == 0 or batch_idx == len(train_dataloader):
                 print(
-                    f"Epoch [{epoch}/{epochs}] "
-                    f"Step [{batch_idx}/{len(dataloader)}] "
+                    f"[TRAIN] Epoch [{epoch}/{epochs}] "
+                    f"Step [{batch_idx}/{len(train_dataloader)}] "
                     f"| total: {total_loss:.4f} "
                     f"| content: {content_loss:.4f} "
                     f"| style: {style_loss:.4f}"
                 )
 
-        num_batches = len(dataloader)
-        avg_total_loss = epoch_total_loss / num_batches
-        avg_content_loss = epoch_content_loss / num_batches
-        avg_style_loss = epoch_style_loss / num_batches
+        num_train_batches = len(train_dataloader)
+        avg_train_total_loss = epoch_total_loss / num_train_batches
+        avg_train_content_loss = epoch_content_loss / num_train_batches
+        avg_train_style_loss = epoch_style_loss / num_train_batches
+
+        # =====================
+        # VALIDATION
+        # =====================
+        model.eval()
+        val_total_loss = 0.0
+        val_content_loss = 0.0
+        val_style_loss = 0.0
+
+        with torch.no_grad():
+            for batch in val_dataloader:
+                if "content" not in batch or "style" not in batch:
+                    raise KeyError(
+                        "Val batch phải chứa key 'content' và 'style'. "
+                        f"Nhưng batch hiện có keys: {list(batch.keys())}"
+                    )
+
+                content_images = batch["content"].to(device, non_blocking=True)
+                style_images = batch["style"].to(device, non_blocking=True)
+
+                if not hasattr(trainer, "validate_step"):
+                    raise AttributeError(
+                        "AdaINTrainer hiện chưa có validate_step(). "
+                        "Bạn cần thêm validate_step vào src/trainer.py."
+                    )
+
+                loss_dict = trainer.validate_step(content_images, style_images)
+
+                val_total_loss += float(loss_dict["total_loss"])
+                val_content_loss += float(loss_dict["content_loss"])
+                val_style_loss += float(loss_dict["style_loss"])
+
+        num_val_batches = len(val_dataloader)
+        avg_val_total_loss = val_total_loss / num_val_batches
+        avg_val_content_loss = val_content_loss / num_val_batches
+        avg_val_style_loss = val_style_loss / num_val_batches
+
         epoch_time = time.time() - epoch_start_time
 
-        history["epoch_losses"].append(avg_total_loss)
-        history["epoch_content_losses"].append(avg_content_loss)
-        history["epoch_style_losses"].append(avg_style_loss)
+        history["train_epoch_losses"].append(avg_train_total_loss)
+        history["train_epoch_content_losses"].append(avg_train_content_loss)
+        history["train_epoch_style_losses"].append(avg_train_style_loss)
+        history["val_epoch_losses"].append(avg_val_total_loss)
+        history["val_epoch_content_losses"].append(avg_val_content_loss)
+        history["val_epoch_style_losses"].append(avg_val_style_loss)
 
         print("-" * 80)
         print(
             f"Epoch {epoch}/{epochs} hoàn tất "
-            f"| avg_total: {avg_total_loss:.4f} "
-            f"| avg_content: {avg_content_loss:.4f} "
-            f"| avg_style: {avg_style_loss:.4f} "
+            f"| train_total: {avg_train_total_loss:.4f} "
+            f"| val_total: {avg_val_total_loss:.4f} "
+            f"| train_content: {avg_train_content_loss:.4f} "
+            f"| val_content: {avg_val_content_loss:.4f} "
+            f"| train_style: {avg_train_style_loss:.4f} "
+            f"| val_style: {avg_val_style_loss:.4f} "
             f"| time: {epoch_time:.2f}s"
         )
         print("-" * 80)
 
+        # Save checkpoint từng epoch
         epoch_ckpt_path = save_dir / f"adain_epoch_{epoch:03d}.pth"
         save_checkpoint(
             save_path=epoch_ckpt_path,
@@ -346,6 +395,7 @@ def main() -> None:
             history=history,
         )
 
+        # Save last checkpoint
         last_ckpt_path = save_dir / "last.pth"
         save_checkpoint(
             save_path=last_ckpt_path,
@@ -357,8 +407,9 @@ def main() -> None:
             history=history,
         )
 
-        if avg_total_loss < best_loss:
-            best_loss = avg_total_loss
+        # Save best checkpoint theo val loss
+        if avg_val_total_loss < best_loss:
+            best_loss = avg_val_total_loss
             best_ckpt_path = save_dir / "best.pth"
             save_checkpoint(
                 save_path=best_ckpt_path,
@@ -369,15 +420,30 @@ def main() -> None:
                 config=cfg,
                 history=history,
             )
-            print(f"[INFO] Đã cập nhật best checkpoint với loss = {best_loss:.4f}")
+            print(f"[INFO] Đã cập nhật best checkpoint với val loss = {best_loss:.4f}")
+
+        # =====================
+        # EARLY STOPPING: val loss tăng liên tục
+        # =====================
+        if prev_val_loss is not None and avg_val_total_loss > prev_val_loss:
+            rise_counter += 1
+            print(f"[INFO] Val loss tăng. rise_counter = {rise_counter}/{rise_patience}")
+        else:
+            rise_counter = 0
+
+        prev_val_loss = avg_val_total_loss
 
         save_json(history, save_dir / "train_history.json")
+
+        if use_early_stopping and rise_counter >= rise_patience:
+            print(f"[EARLY STOPPING] Dừng vì val loss tăng liên tục {rise_patience} epoch.")
+            break
 
     history["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     save_json(history, save_dir / "train_history.json")
 
     print("\n[INFO] Hoàn thành quá trình huấn luyện!")
-    print(f"[INFO] Best loss      : {best_loss:.4f}")
+    print(f"[INFO] Best val loss  : {best_loss:.4f}")
     print(f"[INFO] Checkpoints    : {save_dir}")
     print(f"[INFO] History file   : {save_dir / 'train_history.json'}")
 
