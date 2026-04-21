@@ -11,8 +11,8 @@ echo =========================================
 set CONFIG_FILE=configs/config.yaml
 set CHECKPOINT=src/checkpoints/adain_epoch_7.pth
 set CONTENT_DIR=data/processed/test/content
-set STYLE_DIR=data/processed/test/style_watercolor
-set OUTPUT_DIR=outputs/infer_final_watercolor
+set STYLE_DIR=data/processed/test/style_anime
+set OUTPUT_DIR=outputs/infer_final_anime
 
 
 :: --- LỆNH CHẠY ---

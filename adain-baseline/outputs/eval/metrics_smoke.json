@@ -1,0 +1,16 @@
+{
+    "average_metrics": {
+        "content_loss": 1.234,
+        "style_loss": 2.345,
+        "total_loss": 3.579,
+        "psnr": 24.5
+    },
+    "detailed_results": {
+        "output_mock_content_mock_style.jpg": {
+            "content_loss": 1.234,
+            "style_loss": 2.345,
+            "total_loss": 3.579,
+            "psnr": 24.5
+        }
+    }
+}
