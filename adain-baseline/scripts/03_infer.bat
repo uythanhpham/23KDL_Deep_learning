@@ -9,10 +9,10 @@ echo =========================================
 
 :: --- CẤU HÌNH ĐƯỜNG DẪN ---
 set CONFIG_FILE=configs/config.yaml
-set CHECKPOINT=checkpoints/mock.pth
-set CONTENT_DIR=debug_data/content
-set STYLE_DIR=debug_data/style
-set OUTPUT_DIR=outputs/infer_smoke
+set CHECKPOINT=checkpoints/adain_epoch_7.pth
+set CONTENT_DIR=data/processed/test/content
+set STYLE_DIR=data/processed/test/style_anime
+set OUTPUT_DIR=outputs/infer_final_anime
 
 :: --- LỆNH CHẠY ---
 :: Lưu ý: Windows dùng dấu ^ để xuống dòng thay vì dấu \ như Linux
