@@ -42,3 +42,14 @@ Thumbs.db
 # ========================
 .vscode/
 .idea/
+
+
+# Ignore images
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.webp
+*.tiff
+*.tif

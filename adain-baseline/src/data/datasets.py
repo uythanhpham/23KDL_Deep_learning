@@ -1,12 +1,11 @@
 """Biến ảnh trong debug_data / data đã chuẩn hóa thành tensor.
 
-Giai đoạn 4 - Người 1:
-- Giữ lại phần smoke test ổn định của GĐ3
-- Bổ sung real-mode
-- Bổ sung augmentation train cơ bản:
-    + random horizontal flip
-    + random crop nhẹ (thực hiện bằng resize lớn hơn rồi crop)
-- Dataset hỗ trợ cả debug-mode và real-mode
+Giai đoạn 6 - Người 1:
+- Hỗ trợ debug-mode và real-mode
+- Hỗ trợ split train / val / test thật
+- Hỗ trợ train 1 model với 1 style domain hoặc gộp nhiều style domains
+- Hỗ trợ parse config.yaml thật sự
+- Hỗ trợ augmentation train cơ bản
 """
 
 # E:\Nam3_ki2\TH DL\PROJECT\23KDL_Deep_learning\adain-baseline\src\data\datasets.py
@@ -15,13 +14,18 @@ import argparse
 import json
 import random
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 import torch
 from torch.utils.data import DataLoader, Dataset
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -38,9 +42,19 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
 
 
-def load_json(path: Path) -> Dict:
+def load_json(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_yaml(path: Path) -> Dict[str, Any]:
+    if yaml is None:
+        raise ImportError(
+            "PyYAML chưa được cài. Hãy cài bằng: pip install pyyaml"
+        )
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return data or {}
 
 
 def is_image_file(path: Path) -> bool:
@@ -54,9 +68,6 @@ def scan_image_files(folder: Path) -> List[Path]:
 
 
 def pil_to_tensor(image: Image.Image) -> torch.Tensor:
-    """
-    Convert PIL RGB image -> torch.FloatTensor [3, H, W], range [0, 1]
-    """
     arr = np.asarray(image, dtype=np.float32) / 255.0
     if arr.ndim == 2:
         arr = np.stack([arr, arr, arr], axis=-1)
@@ -66,15 +77,6 @@ def pil_to_tensor(image: Image.Image) -> torch.Tensor:
 
 def resize_pil(image: Image.Image, image_size: int) -> Image.Image:
     return image.resize((image_size, image_size), RESAMPLE_BILINEAR)
-
-
-def center_crop_pil(image: Image.Image, crop_size: int) -> Image.Image:
-    w, h = image.size
-    left = max(0, (w - crop_size) // 2)
-    top = max(0, (h - crop_size) // 2)
-    right = left + crop_size
-    bottom = top + crop_size
-    return image.crop((left, top, right, bottom))
 
 
 def random_crop_pil(image: Image.Image, crop_size: int) -> Image.Image:
@@ -100,9 +102,6 @@ def default_image_loader(path: Path, image_size: int) -> torch.Tensor:
 
 
 def validate_image_file(path: Path) -> Tuple[bool, str]:
-    """
-    Kiểm tra nhanh file ảnh có mở/verify được không.
-    """
     try:
         with Image.open(path) as img:
             img.verify()
@@ -132,9 +131,6 @@ def filter_valid_images(paths: List[Path]) -> Tuple[List[Path], List[Dict[str, s
 
 
 def safe_collate_fn(batch: List[Optional[Dict[str, object]]]) -> Dict[str, object]:
-    """
-    Loại bỏ sample None để DataLoader không văng nếu 1 vài ảnh lỗi lúc runtime.
-    """
     valid_samples = [sample for sample in batch if sample is not None]
 
     if len(valid_samples) == 0:
@@ -147,19 +143,19 @@ def safe_collate_fn(batch: List[Optional[Dict[str, object]]]) -> Dict[str, objec
     style = torch.stack([sample["style"] for sample in valid_samples], dim=0)
     content_path = [sample["content_path"] for sample in valid_samples]
     style_path = [sample["style_path"] for sample in valid_samples]
+    style_domain = [sample["style_domain"] for sample in valid_samples]
 
     return {
         "content": content,
         "style": style,
         "content_path": content_path,
         "style_path": style_path,
+        "style_domain": style_domain,
     }
 
 
 class BasicImageTransform:
     """
-    Transform train/eval cơ bản, không phụ thuộc torchvision.
-
     Train augmentation:
     - random horizontal flip
     - random crop nhẹ: resize lên một chút rồi crop về image_size
@@ -203,7 +199,10 @@ class BasicImageTransform:
 
 class AdaINUnpairedDataset(Dataset):
     """
-    Dataset unpaired dùng chung cho debug-mode và real-mode.
+    Dataset unpaired:
+    - random content từ content_files
+    - random style từ style_files
+    - style_files có thể là 1 domain hoặc gộp nhiều domains
 
     Contract mỗi sample:
         {
@@ -211,6 +210,7 @@ class AdaINUnpairedDataset(Dataset):
             "style": Tensor [3, H, W],
             "content_path": str,
             "style_path": str,
+            "style_domain": str,
         }
     """
 
@@ -218,10 +218,12 @@ class AdaINUnpairedDataset(Dataset):
         self,
         content_files: List[Path],
         style_files: List[Path],
+        style_domains_by_path: Optional[Dict[str, str]] = None,
         image_size: int = 256,
         transform: Optional[Callable[[Image.Image], torch.Tensor]] = None,
         seed: int = 42,
-        pair_mode: str = "cycle",
+        content_pair_mode: str = "cycle",
+        style_pair_mode: str = "random",
         validate_on_init: bool = True,
         max_retry: int = 8,
         dataset_name: str = "adain_dataset",
@@ -229,10 +231,12 @@ class AdaINUnpairedDataset(Dataset):
         self.image_size = image_size
         self.transform = transform
         self.seed = seed
-        self.pair_mode = pair_mode
+        self.content_pair_mode = content_pair_mode
+        self.style_pair_mode = style_pair_mode
         self.validate_on_init = validate_on_init
         self.max_retry = max_retry
         self.dataset_name = dataset_name
+        self.style_domains_by_path = style_domains_by_path or {}
 
         self.invalid_content_files: List[Dict[str, str]] = []
         self.invalid_style_files: List[Dict[str, str]] = []
@@ -264,13 +268,6 @@ class AdaINUnpairedDataset(Dataset):
             "invalid_style_count": len(self.invalid_style_files),
         }
 
-    def _get_style_index(self, index: int) -> int:
-        if self.pair_mode == "cycle":
-            return index % len(self.style_files)
-        if self.pair_mode == "random":
-            return self._rng.randrange(len(self.style_files))
-        raise ValueError(f"Unsupported pair_mode: {self.pair_mode}")
-
     def _load_tensor(self, path: Path) -> torch.Tensor:
         if self.transform is not None:
             with Image.open(path) as img:
@@ -282,27 +279,31 @@ class AdaINUnpairedDataset(Dataset):
         total = len(self.content_files)
         retry_count = min(self.max_retry, total - 1)
 
-        for offset in range(retry_count + 1):
-            candidate = self.content_files[(index + offset) % total]
-            if candidate not in candidates:
-                candidates.append(candidate)
-        return candidates
-
-    def _build_style_candidates(self, index: int) -> List[Path]:
-        candidates: List[Path] = []
-        total = len(self.style_files)
-
-        first_idx = self._get_style_index(index)
-        candidates.append(self.style_files[first_idx])
-
-        retry_count = min(self.max_retry, total - 1)
-
-        if self.pair_mode == "cycle":
-            for offset in range(1, retry_count + 1):
-                candidate = self.style_files[(first_idx + offset) % total]
+        if self.content_pair_mode == "cycle":
+            for offset in range(retry_count + 1):
+                candidate = self.content_files[(index + offset) % total]
                 if candidate not in candidates:
                     candidates.append(candidate)
-        elif self.pair_mode == "random":
+        elif self.content_pair_mode == "random":
+            all_indices = list(range(total))
+            self._rng.shuffle(all_indices)
+            for idx_ in all_indices:
+                candidate = self.content_files[idx_]
+                if candidate not in candidates:
+                    candidates.append(candidate)
+                if len(candidates) >= retry_count + 1:
+                    break
+        else:
+            raise ValueError(f"Unsupported content_pair_mode: {self.content_pair_mode}")
+
+        return candidates
+
+    def _build_style_candidates(self) -> List[Path]:
+        candidates: List[Path] = []
+        total = len(self.style_files)
+        retry_count = min(self.max_retry, total - 1)
+
+        if self.style_pair_mode == "random":
             all_indices = list(range(total))
             self._rng.shuffle(all_indices)
             for idx_ in all_indices:
@@ -311,6 +312,14 @@ class AdaINUnpairedDataset(Dataset):
                     candidates.append(candidate)
                 if len(candidates) >= retry_count + 1:
                     break
+        elif self.style_pair_mode == "cycle":
+            start_idx = self._rng.randrange(total)
+            for offset in range(retry_count + 1):
+                candidate = self.style_files[(start_idx + offset) % total]
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        else:
+            raise ValueError(f"Unsupported style_pair_mode: {self.style_pair_mode}")
 
         return candidates
 
@@ -332,7 +341,7 @@ class AdaINUnpairedDataset(Dataset):
 
     def __getitem__(self, index: int) -> Optional[Dict[str, object]]:
         content_candidates = self._build_content_candidates(index)
-        style_candidates = self._build_style_candidates(index)
+        style_candidates = self._build_style_candidates()
 
         content_tensor, content_path, _ = self._try_load_first_valid(
             content_candidates,
@@ -348,11 +357,17 @@ class AdaINUnpairedDataset(Dataset):
         if style_tensor is None or style_path is None:
             return None
 
+        style_domain = self.style_domains_by_path.get(
+            str(style_path),
+            "unknown",
+        )
+
         return {
             "content": content_tensor,
             "style": style_tensor,
             "content_path": str(content_path),
             "style_path": str(style_path),
+            "style_domain": style_domain,
         }
 
 
@@ -365,11 +380,12 @@ def normalize_style_domain(style_domain: str) -> str:
         "style_watercolor": "watercolor",
         "sketch": "sketch",
         "style_sketch": "sketch",
+        "all": "all",
     }
     if style_domain not in mapping:
         raise ValueError(
             f"Unsupported style_domain: {style_domain}. "
-            f"Supported: anime, watercolor, sketch"
+            f"Supported: anime, watercolor, sketch, all"
         )
     return mapping[style_domain]
 
@@ -397,7 +413,6 @@ def build_debug_dataset(
     root_dir: str = "debug_data",
     image_size: int = 256,
     seed: int = 42,
-    pair_mode: str = "cycle",
     validate_on_init: bool = True,
     max_retry: int = 8,
 ) -> AdaINUnpairedDataset:
@@ -415,56 +430,79 @@ def build_debug_dataset(
     return AdaINUnpairedDataset(
         content_files=content_files,
         style_files=style_files,
+        style_domains_by_path={str(p): "debug_style" for p in style_files},
         image_size=image_size,
         transform=transform,
         seed=seed,
-        pair_mode=pair_mode,
+        content_pair_mode="cycle",
+        style_pair_mode="random",
         validate_on_init=validate_on_init,
         max_retry=max_retry,
         dataset_name="debug_dataset",
     )
 
 
-def resolve_real_dirs(
+def resolve_real_content_dir(real_root_dir: Path, split: str) -> Path:
+    split_content_dir = real_root_dir / split / "content"
+    if split_content_dir.exists():
+        return split_content_dir
+
+    legacy_content_dir = real_root_dir / "content"
+    return legacy_content_dir
+
+
+def resolve_real_style_dirs(
     real_root_dir: Path,
     split: str,
     style_domain: str,
-) -> Tuple[Path, Path]:
-    """
-    Hỗ trợ 2 layout:
-
-    1) Chưa split (GĐ2/GĐ4):
-       data/processed/content
-       data/processed/style_anime
-       data/processed/style_watercolor
-       data/processed/style_sketch
-
-    2) Đã split (hữu ích cho GĐ6 về sau):
-       data/processed/train/content
-       data/processed/train/style_anime
-       ...
-    """
+) -> List[Path]:
     style_domain = normalize_style_domain(style_domain)
+
+    all_style_folders = [
+        "style_anime",
+        "style_sketch",
+        "style_watercolor",
+    ]
+
+    if style_domain == "all":
+        split_dirs = [real_root_dir / split / name for name in all_style_folders]
+        if all(d.exists() for d in split_dirs):
+            return split_dirs
+
+        legacy_dirs = [real_root_dir / name for name in all_style_folders]
+        return legacy_dirs
+
     style_folder = f"style_{style_domain}"
-
-    split_content_dir = real_root_dir / split / "content"
     split_style_dir = real_root_dir / split / style_folder
+    if split_style_dir.exists():
+        return [split_style_dir]
 
-    if split_content_dir.exists() and split_style_dir.exists():
-        return split_content_dir, split_style_dir
+    legacy_style_dir = real_root_dir / style_folder
+    return [legacy_style_dir]
 
-    base_content_dir = real_root_dir / "content"
-    base_style_dir = real_root_dir / style_folder
-    return base_content_dir, base_style_dir
+
+def collect_style_files_from_dirs(style_dirs: List[Path]) -> Tuple[List[Path], Dict[str, str]]:
+    style_files: List[Path] = []
+    style_domains_by_path: Dict[str, str] = {}
+
+    for style_dir in style_dirs:
+        files = scan_image_files(style_dir)
+        domain_name = style_dir.name
+
+        for path in files:
+            style_files.append(path)
+            style_domains_by_path[str(path)] = domain_name
+
+    style_files = sorted(style_files)
+    return style_files, style_domains_by_path
 
 
 def build_real_dataset(
     real_root_dir: str = "data/processed",
     split: str = "train",
-    style_domain: str = "anime",
+    style_domain: str = "all",
     image_size: int = 256,
     seed: int = 42,
-    pair_mode: str = "random",
     validate_on_init: bool = True,
     max_retry: int = 8,
     enable_hflip: bool = True,
@@ -474,18 +512,24 @@ def build_real_dataset(
     content_dir: Optional[str] = None,
     style_dir: Optional[str] = None,
 ) -> AdaINUnpairedDataset:
-    if content_dir is not None and style_dir is not None:
+    root = Path(real_root_dir)
+
+    if content_dir is not None:
         content_folder = Path(content_dir)
-        style_folder = Path(style_dir)
     else:
-        content_folder, style_folder = resolve_real_dirs(
-            real_root_dir=Path(real_root_dir),
+        content_folder = resolve_real_content_dir(root, split)
+
+    if style_dir is not None:
+        style_dirs = [Path(style_dir)]
+    else:
+        style_dirs = resolve_real_style_dirs(
+            real_root_dir=root,
             split=split,
             style_domain=style_domain,
         )
 
     content_files = scan_image_files(content_folder)
-    style_files = scan_image_files(style_folder)
+    style_files, style_domains_by_path = collect_style_files_from_dirs(style_dirs)
 
     transform = build_train_transform(
         image_size=image_size,
@@ -499,10 +543,12 @@ def build_real_dataset(
     return AdaINUnpairedDataset(
         content_files=content_files,
         style_files=style_files,
+        style_domains_by_path=style_domains_by_path,
         image_size=image_size,
         transform=transform,
         seed=seed,
-        pair_mode=pair_mode,
+        content_pair_mode="cycle",
+        style_pair_mode="random",
         validate_on_init=validate_on_init,
         max_retry=max_retry,
         dataset_name=f"real_dataset_{style_domain}_{split}",
@@ -514,10 +560,9 @@ def build_dataset(
     root_dir: str = "debug_data",
     real_root_dir: str = "data/processed",
     split: str = "train",
-    style_domain: str = "anime",
+    style_domain: str = "all",
     image_size: int = 256,
     seed: int = 42,
-    pair_mode: str = "cycle",
     validate_on_init: bool = True,
     max_retry: int = 8,
     enable_hflip: bool = True,
@@ -532,7 +577,6 @@ def build_dataset(
             root_dir=root_dir,
             image_size=image_size,
             seed=seed,
-            pair_mode=pair_mode,
             validate_on_init=validate_on_init,
             max_retry=max_retry,
         )
@@ -544,7 +588,6 @@ def build_dataset(
             style_domain=style_domain,
             image_size=image_size,
             seed=seed,
-            pair_mode=pair_mode,
             validate_on_init=validate_on_init,
             max_retry=max_retry,
             enable_hflip=enable_hflip,
@@ -558,7 +601,7 @@ def build_dataset(
     raise ValueError(f"Unsupported mode: {mode}")
 
 
-def load_manifest_if_exists(root_dir: str, mode: str) -> Optional[Dict]:
+def load_manifest_if_exists(root_dir: str, mode: str) -> Optional[Dict[str, Any]]:
     root = Path(root_dir)
 
     if mode == "debug":
@@ -572,6 +615,65 @@ def load_manifest_if_exists(root_dir: str, mode: str) -> Optional[Dict]:
         except Exception:
             return None
     return None
+
+
+def deep_get(config: Dict[str, Any], keys: List[str], default: Any = None) -> Any:
+    current = config
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return current
+
+
+def apply_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    if args.config is None:
+        return args
+
+    config_path = Path(args.config)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Không tìm thấy config file: {config_path}")
+
+    config = load_yaml(config_path)
+
+    dataset_cfg = config.get("dataset", {})
+    train_cfg = config.get("train", {})
+    augment_cfg = dataset_cfg.get("augmentation", {})
+
+    if args.mode is None:
+        args.mode = dataset_cfg.get("mode", "real")
+
+    if args.real_root_dir is None:
+        args.real_root_dir = dataset_cfg.get("real_root_dir", "data/processed")
+
+    if args.root_dir is None:
+        args.root_dir = dataset_cfg.get("debug_root_dir", "debug_data")
+
+    if args.split is None:
+        args.split = dataset_cfg.get("split", "train")
+
+    if args.style_domain is None:
+        args.style_domain = dataset_cfg.get("style_domain", "all")
+
+    if args.image_size is None:
+        args.image_size = dataset_cfg.get("image_size", 256)
+
+    if args.batch_size is None:
+        args.batch_size = train_cfg.get("batch_size", 4)
+
+    if args.seed is None:
+        args.seed = config.get("seed", 42)
+
+    if args.num_workers is None:
+        args.num_workers = train_cfg.get("num_workers", 0)
+
+    if args.flip_prob is None:
+        args.flip_prob = augment_cfg.get("flip_prob", 0.5)
+
+    if args.crop_scale is None:
+        args.crop_scale = augment_cfg.get("crop_scale", 1.1)
+
+    return args
 
 
 def build_dataloader(
@@ -594,6 +696,7 @@ def summarize_batch(batch: Dict[str, object], batch_idx: int = 0) -> None:
     style = batch["style"]
     content_path = batch["content_path"]
     style_path = batch["style_path"]
+    style_domain = batch["style_domain"]
 
     print("=" * 80)
     print(f"SMOKE TEST: AdaIN dataset contract | batch_idx={batch_idx}")
@@ -614,6 +717,11 @@ def summarize_batch(batch: Dict[str, object], batch_idx: int = 0) -> None:
     else:
         print(f"style_path        : {style_path}")
 
+    if isinstance(style_domain, list) and len(style_domain) > 0:
+        print(f"style_domain[0]   : {style_domain[0]}")
+    else:
+        print(f"style_domain      : {style_domain}")
+
     if torch.is_tensor(content):
         print(f"content min/max   : {content.min().item():.4f} / {content.max().item():.4f}")
     if torch.is_tensor(style):
@@ -627,6 +735,7 @@ def assert_batch_contract(batch: Dict[str, object]) -> None:
     assert "style" in batch, "Thiếu key 'style'"
     assert "content_path" in batch, "Thiếu key 'content_path'"
     assert "style_path" in batch, "Thiếu key 'style_path'"
+    assert "style_domain" in batch, "Thiếu key 'style_domain'"
 
     assert torch.is_tensor(batch["content"]), "'content' phải là tensor"
     assert torch.is_tensor(batch["style"]), "'style' phải là tensor"
@@ -642,9 +751,11 @@ def assert_batch_contract(batch: Dict[str, object]) -> None:
 
     assert isinstance(batch["content_path"], list), "'content_path' phải là list[str] sau collate"
     assert isinstance(batch["style_path"], list), "'style_path' phải là list[str] sau collate"
+    assert isinstance(batch["style_domain"], list), "'style_domain' phải là list[str] sau collate"
 
     assert len(batch["content_path"]) == batch["content"].shape[0], "Số content_path không khớp batch size"
     assert len(batch["style_path"]) == batch["style"].shape[0], "Số style_path không khớp batch size"
+    assert len(batch["style_domain"]) == batch["style"].shape[0], "Số style_domain không khớp batch size"
 
     assert batch["content"].dtype == torch.float32, "content phải là float32"
     assert batch["style"].dtype == torch.float32, "style phải là float32"
@@ -683,39 +794,39 @@ def run_smoke_test(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Giai đoạn 4 - AdaIN dataset hỗ trợ debug-mode + real-mode + augmentation train."
+        description="Giai đoạn 6 - AdaIN dataset hỗ trợ debug-mode + real-mode + multi-style + config.yaml."
     )
 
     parser.add_argument(
         "--config",
         type=str,
         default=None,
-        help="Giữ để tương thích CLI kế hoạch. Hiện tại chưa parse config.",
+        help="Path tới config.yaml",
     )
     parser.add_argument(
         "--mode",
         type=str,
-        default="debug",
+        default=None,
         choices=["debug", "real"],
         help="debug: dùng debug_data | real: dùng dữ liệu đã chuẩn hóa",
     )
     parser.add_argument(
         "--split",
         type=str,
-        default="train",
+        default=None,
         choices=["train", "val", "test"],
         help="Split logic cho augmentation và resolve thư mục",
     )
     parser.add_argument(
         "--root_dir",
         type=str,
-        default="debug_data",
+        default=None,
         help="Thư mục root cho debug mode",
     )
     parser.add_argument(
         "--real_root_dir",
         type=str,
-        default="data/processed",
+        default=None,
         help="Thư mục root cho real mode",
     )
     parser.add_argument(
@@ -728,45 +839,38 @@ def parse_args() -> argparse.Namespace:
         "--style_dir",
         type=str,
         default=None,
-        help="Tùy chọn override trực tiếp style_dir cho real mode",
+        help="Tùy chọn override trực tiếp 1 style_dir cho real mode",
     )
     parser.add_argument(
         "--style_domain",
         type=str,
-        default="anime",
-        choices=["anime", "watercolor", "sketch", "style_anime", "style_watercolor", "style_sketch"],
-        help="Chọn style domain cho real mode",
+        default=None,
+        choices=["anime", "watercolor", "sketch", "all", "style_anime", "style_watercolor", "style_sketch"],
+        help="Chọn style domain cho real mode. all = gộp 3 style folders",
     )
     parser.add_argument(
         "--image_size",
         type=int,
-        default=256,
+        default=None,
         help="Kích thước ảnh vuông image_size x image_size",
     )
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=4,
+        default=None,
         help="Batch size dùng cho smoke test",
     )
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=0,
+        default=None,
         help="Num workers cho DataLoader",
     )
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
+        default=None,
         help="Seed tái lập",
-    )
-    parser.add_argument(
-        "--pair_mode",
-        type=str,
-        default="cycle",
-        choices=["cycle", "random"],
-        help="Cách ghép style cho từng content",
     )
     parser.add_argument(
         "--max_retry",
@@ -792,13 +896,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--flip_prob",
         type=float,
-        default=0.5,
+        default=None,
         help="Xác suất horizontal flip",
     )
     parser.add_argument(
         "--crop_scale",
         type=float,
-        default=1.1,
+        default=None,
         help="Tỉ lệ resize trước khi crop, ví dụ 1.1",
     )
     parser.add_argument(
@@ -817,6 +921,31 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    args = apply_config_defaults(args)
+
+    if args.mode is None:
+        args.mode = "real"
+    if args.split is None:
+        args.split = "train"
+    if args.root_dir is None:
+        args.root_dir = "debug_data"
+    if args.real_root_dir is None:
+        args.real_root_dir = "data/processed"
+    if args.style_domain is None:
+        args.style_domain = "all"
+    if args.image_size is None:
+        args.image_size = 256
+    if args.batch_size is None:
+        args.batch_size = 4
+    if args.num_workers is None:
+        args.num_workers = 0
+    if args.seed is None:
+        args.seed = 42
+    if args.flip_prob is None:
+        args.flip_prob = 0.5
+    if args.crop_scale is None:
+        args.crop_scale = 1.1
+
     set_seed(args.seed)
 
     manifest_root = args.root_dir if args.mode == "debug" else args.real_root_dir
@@ -836,6 +965,7 @@ def main() -> None:
             print(
                 f"Manifest summary -> "
                 f"mode={manifest.get('mode')}, "
+                f"stage={manifest.get('stage')}, "
                 f"image_size={manifest.get('image_size')}, "
                 f"total_processed={manifest.get('total_processed')}"
             )
@@ -848,7 +978,6 @@ def main() -> None:
         style_domain=args.style_domain,
         image_size=args.image_size,
         seed=args.seed,
-        pair_mode=args.pair_mode,
         validate_on_init=not args.skip_validate_on_init,
         max_retry=args.max_retry,
         enable_hflip=not args.disable_hflip,
@@ -864,7 +993,6 @@ def main() -> None:
     print(f"Mode                   : {args.mode}")
     print(f"Dataset length         : {len(dataset)}")
     print(f"Split                  : {args.split}")
-    print(f"Pair mode              : {args.pair_mode}")
     print(f"Validate on init       : {not args.skip_validate_on_init}")
     print(f"Invalid content files  : {invalid_summary['invalid_content_count']}")
     print(f"Invalid style files    : {invalid_summary['invalid_style_count']}")
@@ -905,7 +1033,7 @@ def main() -> None:
             verbose=False,
         )
 
-    print("DONE: Dataset/DataLoader hợp lệ cho GĐ4 (debug-mode + real-mode + augmentation).")
+    print("DONE: Dataset/DataLoader hợp lệ cho GĐ6 (multi-style + config thật).")
 
 
 if __name__ == "__main__":
@@ -913,17 +1041,9 @@ if __name__ == "__main__":
 
 
 # --------------------------------------------------
-# Ví dụ chạy giữ nguyên debug-mode cũ:
-# python -m src.data.datasets --config configs/config.yaml --split train --smoke_test
+# Ví dụ:
+# python -m src.data.datasets --config configs/config.yaml --smoke_test
 #
-# Ví dụ chạy debug-mode rõ ràng:
-# python -m src.data.datasets --mode debug --root_dir debug_data --split train --smoke_test
+# python -m src.data.datasets --mode real --real_root_dir data/processed --split train --style_domain all --smoke_test
 #
-# Ví dụ chạy real-mode với data/processed/content + style_anime:
-# python -m src.data.datasets --mode real --real_root_dir data/processed --style_domain anime --split train --smoke_test
-#
-# Ví dụ chạy real-mode với style_sketch:
-# python -m src.data.datasets --mode real --real_root_dir data/processed --style_domain sketch --split train --smoke_test
-#
-# Ví dụ tắt augmentation:
-# python -m src.data.datasets --mode real --real_root_dir data/processed --style_domain watercolor --split train --disable_hflip --disable_random_crop --smoke_test
+# python -m src.data.datasets --mode real --real_root_dir data/processed --split train --style_domain anime --smoke_test
