@@ -23,7 +23,7 @@ import json
 import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import torch
 import yaml
@@ -31,11 +31,6 @@ from torch.optim import Adam
 
 from src.models.adain import AdaINStyleTransfer
 from src.trainer import AdaINTrainer
-
-# =========================================================
-# Import dataset builders một cách "mềm" để chịu được repo
-# đang có tên hàm hơi khác nhau.
-# =========================================================
 from src.data import datasets as datasets_module
 
 
@@ -109,7 +104,7 @@ def build_dataset_from_config(cfg: Dict[str, Any]):
 
     Kỳ vọng các builder ở src.data.datasets có chữ ký gần giống:
     - build_debug_dataset(root_dir=..., image_size=..., ...)
-    - build_real_dataset(root_dir=..., split=..., style_domain=..., image_size=..., ...)
+    - build_real_dataset(real_root_dir=..., split=..., style_domain=..., image_size=..., ...)
       hoặc
     - build_dataset(mode=..., root_dir=..., split=..., style_domain=..., image_size=..., ...)
     """
@@ -135,17 +130,15 @@ def build_dataset_from_config(cfg: Dict[str, Any]):
         split = str(get_optional(cfg, "split", "train"))
         style_domain = get_optional(cfg, "style_domain", None)
 
-        # Ưu tiên build_real_dataset nếu có
         if hasattr(datasets_module, "build_real_dataset"):
             dataset = datasets_module.build_real_dataset(
-                root_dir=real_root_dir,
+                real_root_dir=real_root_dir,
                 split=split,
                 style_domain=style_domain,
                 image_size=image_size,
             )
             return dataset
 
-        # Fallback nếu repo đang dùng tên chung build_dataset
         if hasattr(datasets_module, "build_dataset"):
             dataset = datasets_module.build_dataset(
                 mode=mode,
@@ -174,16 +167,12 @@ def build_dataloader_from_config(dataset, cfg: Dict[str, Any]):
     batch_size = int(get_optional(cfg, "batch_size", 8))
     num_workers = int(get_optional(cfg, "num_workers", 2))
     shuffle = bool(get_optional(cfg, "shuffle", True))
-    pin_memory = bool(get_optional(cfg, "pin_memory", torch.cuda.is_available()))
-    drop_last = bool(get_optional(cfg, "drop_last", False))
 
     dataloader = datasets_module.build_dataloader(
-        dataset,
+        dataset=dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=pin_memory,
-        drop_last=drop_last,
     )
     return dataloader
 
@@ -239,7 +228,6 @@ def main() -> None:
     device = get_device()
     save_dir = resolve_save_dir(cfg)
 
-    # Cho log dễ nhìn trên Kaggle
     print("=" * 80)
     print("AdaIN Training")
     print("=" * 80)
@@ -249,10 +237,8 @@ def main() -> None:
     print(f"Save dir    : {save_dir}")
     print("=" * 80)
 
-    # Lưu lại config thực tế đã dùng
     save_json(cfg, save_dir / "resolved_config.json")
 
-    # 1) Dataset / Dataloader
     dataset = build_dataset_from_config(cfg)
     dataloader = build_dataloader_from_config(dataset, cfg)
 
@@ -264,14 +250,12 @@ def main() -> None:
     print(f"[INFO] Batch size       : {get_optional(cfg, 'batch_size', 8)}")
     print(f"[INFO] Image size       : {get_optional(cfg, 'image_size', 256)}")
 
-    # 2) Model / Optimizer / Trainer
     model = AdaINStyleTransfer().to(device)
 
     lr = float(get_optional(cfg, "lr", 1e-4))
     lambda_style = float(get_optional(cfg, "lambda_style", 10.0))
     epochs = int(get_optional(cfg, "epochs", 5))
 
-    # Chỉ train decoder như pipeline AdaIN phổ biến
     optimizer = Adam(model.decoder.parameters(), lr=lr)
 
     trainer = AdaINTrainer(
@@ -281,7 +265,6 @@ def main() -> None:
         device=device,
     )
 
-    # 3) Training history
     history: Dict[str, Any] = {
         "epoch_losses": [],
         "epoch_content_losses": [],
@@ -352,7 +335,6 @@ def main() -> None:
         )
         print("-" * 80)
 
-        # Save checkpoint từng epoch
         epoch_ckpt_path = save_dir / f"adain_epoch_{epoch:03d}.pth"
         save_checkpoint(
             save_path=epoch_ckpt_path,
@@ -364,7 +346,6 @@ def main() -> None:
             history=history,
         )
 
-        # Save "last"
         last_ckpt_path = save_dir / "last.pth"
         save_checkpoint(
             save_path=last_ckpt_path,
@@ -376,7 +357,6 @@ def main() -> None:
             history=history,
         )
 
-        # Save "best"
         if avg_total_loss < best_loss:
             best_loss = avg_total_loss
             best_ckpt_path = save_dir / "best.pth"
@@ -391,7 +371,6 @@ def main() -> None:
             )
             print(f"[INFO] Đã cập nhật best checkpoint với loss = {best_loss:.4f}")
 
-        # Lưu history sau mỗi epoch để Kaggle crash giữa chừng vẫn còn log
         save_json(history, save_dir / "train_history.json")
 
     history["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
