@@ -290,6 +290,39 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
+# THÊM hàm mới bên dưới
+def build_dataloaders(
+    root_dir: str = "debug_data",
+    image_size: int = 256,
+    seed: int = 42,
+    pair_mode: str = "cycle",
+    batch_size: int = 4,
+    val_split: float = 0.2,
+    num_workers: int = 0,
+) -> tuple:
+    from torch.utils.data import Subset
+
+    full_dataset = build_debug_dataset(
+        root_dir=root_dir,
+        image_size=image_size,
+        seed=seed,
+        pair_mode=pair_mode,
+    )
+
+    total      = len(full_dataset)
+    val_size   = max(1, int(total * val_split))
+    train_size = total - val_size
+
+    train_dataset = Subset(full_dataset, list(range(train_size)))
+    val_dataset   = Subset(full_dataset, list(range(train_size, total)))
+
+    # Tái dụng hàm cũ, không viết lại DataLoader
+    train_loader = build_dataloader(train_dataset, batch_size=batch_size,
+                                    shuffle=True,  num_workers=num_workers)
+    val_loader   = build_dataloader(val_dataset,   batch_size=batch_size,
+                                    shuffle=False, num_workers=num_workers)
+
+    return train_loader, val_loader
 
 def main() -> None:
     args = parse_args()
