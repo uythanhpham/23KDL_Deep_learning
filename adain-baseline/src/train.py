@@ -70,7 +70,7 @@ def get_device() -> torch.device:
 
 
 def resolve_save_dir(cfg: Dict[str, Any]) -> Path:
-    save_dir = cfg.get("save_dir", "/kaggle/working/checkpoints")
+    save_dir = cfg.get("save_dir", "/content/drive/MyDrive/Nam3_ki_2/TH_DL/project/AdaIn/checkpoints")
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     return save_dir

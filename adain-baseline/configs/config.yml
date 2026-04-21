@@ -1,7 +1,5 @@
-seed: 42
-
 mode: real
-real_root_dir: /kaggle/input/datasets/uythanhpham/train-dataset/train 
+real_root_dir: "/content/drive/MyDrive/Năm 3 kì 2/TH DL/project/AdaIn/2_data/processed"
 split: train
 style_domain: anime
 image_size: 256
@@ -15,4 +13,6 @@ lambda_style: 10.0
 epochs: 5
 log_every: 10
 
-save_dir: /kaggle/working/checkpoints
+save_dir: "/content/drive/MyDrive/Năm 3 kì 2/TH DL/project/AdaIn/checkpoints"
+
+seed: 42

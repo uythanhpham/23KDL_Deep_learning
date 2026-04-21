@@ -41,8 +41,3 @@ class AdaINTrainer:
             "content_loss": loss_c.item(),
             "style_loss": loss_s.item()
         }
-        return {
-            "total_loss": total_loss.item(),
-            "content_loss": loss_c.item(),
-            "style_loss": loss_s.item()
-        }
