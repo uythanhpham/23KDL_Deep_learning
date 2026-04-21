@@ -2,8 +2,8 @@
 """Chạy vòng lặp train/validate và lưu checkpoint."""
 # NOTE ****:
 import torch
-from adain_baseline.src.models.adain import adain
-from adain_baseline.src.losses.perceptual import perceptual_loss
+from src.models.adain import adain
+from src.losses.perceptual import perceptual_loss
 
 class AdaINTrainer:
     def __init__(self, model, optimizer, lambda_style=10.0, device="cpu"):
