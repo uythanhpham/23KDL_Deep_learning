@@ -75,6 +75,30 @@ def parse_args() -> argparse.Namespace:
         help="Hệ số style loss"
     )
     parser.add_argument(
+        "--lambda_content",
+        type=float,
+        default=1.0,
+        help="Hệ số content loss"
+    )
+    parser.add_argument(
+        "--style_matrix_weight",
+        type=float,
+        default=1.0,
+        help="Trọng số phần ma trận tương quan"
+    )
+    parser.add_argument(
+        "--style_stat_weight",
+        type=float,
+        default=0.25,
+        help="Trọng số phần mean/std"
+    )
+    parser.add_argument(
+        "--loss_use_smooth_l1",
+        type=lambda x: str(x).lower() in ["1", "true", "yes", "y"],
+        default=True,
+        help="Có dùng SmoothL1 cho loss hay không"
+    )
+    parser.add_argument(
         "--output_file",
         type=str,
         default="outputs/eval/test_loss.json",
@@ -169,16 +193,22 @@ def build_test_dataloader(
 
 
 def evaluate_test_loss(
-    model: AdaINStyleTransfer,
+    model,
     dataloader,
-    device: torch.device,
-    lambda_style: float,
-) -> Dict[str, Any]:
+    device,
+    lambda_content,
+    lambda_style,
+    style_matrix_weight,
+    style_stat_weight,
+    loss_use_smooth_l1,
+):
     model.eval()
 
     total_loss_sum = 0.0
     content_loss_sum = 0.0
     style_loss_sum = 0.0
+    style_matrix_loss_sum = 0.0
+    style_stat_loss_sum = 0.0
     num_batches = 0
     num_samples = 0
 
@@ -194,18 +224,20 @@ def evaluate_test_loss(
             style = batch["style"].to(device, non_blocking=True)
 
             content_feat = model.encoder(content)
-            style_feats = model.encoder(style, return_all=True)
-            style_feat = style_feats[-1]
+            style_feat = model.encoder(style)
 
             t = adain(content_feat, style_feat)
             output = model.decoder(t).clamp(0, 1)
-            output_feats = model.encoder(output, return_all=True)
+            output_feat = model.encoder(output)
 
-            total_loss, loss_c, loss_s = perceptual_loss(
-                output_feats=output_feats,
-                style_feats=style_feats,
+            total_loss, loss_c, loss_s, loss_s_mat, loss_s_stat = perceptual_loss(
+                output_feat=output_feat,
                 adain_feat=t,
+                lambda_content=lambda_content,
                 lambda_style=lambda_style,
+                matrix_weight=style_matrix_weight,
+                stat_weight=style_stat_weight,
+                use_smooth_l1=loss_use_smooth_l1,
             )
 
             batch_size = content.size(0)
@@ -213,6 +245,8 @@ def evaluate_test_loss(
             total_loss_sum += float(total_loss.item()) * batch_size
             content_loss_sum += float(loss_c.item()) * batch_size
             style_loss_sum += float(loss_s.item()) * batch_size
+            style_matrix_loss_sum += float(loss_s_mat.item()) * batch_size
+            style_stat_loss_sum += float(loss_s_stat.item()) * batch_size
 
             num_batches += 1
             num_samples += batch_size
@@ -222,7 +256,9 @@ def evaluate_test_loss(
                     f"[Eval] Batch {batch_idx + 1}/{len(dataloader)} "
                     f"| total={total_loss.item():.4f} "
                     f"| content={loss_c.item():.4f} "
-                    f"| style={loss_s.item():.4f}"
+                    f"| style={loss_s.item():.4f} "
+                    f"| style_mat={loss_s_mat.item():.4f} "
+                    f"| style_stat={loss_s_stat.item():.4f}"
                 )
 
     if num_samples == 0:
@@ -231,6 +267,8 @@ def evaluate_test_loss(
     avg_total_loss = total_loss_sum / num_samples
     avg_content_loss = content_loss_sum / num_samples
     avg_style_loss = style_loss_sum / num_samples
+    avg_style_matrix_loss = style_matrix_loss_sum / num_samples
+    avg_style_stat_loss = style_stat_loss_sum / num_samples
 
     return {
         "num_batches": num_batches,
@@ -238,6 +276,8 @@ def evaluate_test_loss(
         "avg_total_loss": avg_total_loss,
         "avg_content_loss": avg_content_loss,
         "avg_style_loss": avg_style_loss,
+        "avg_style_matrix_loss": avg_style_matrix_loss,
+        "avg_style_stat_loss": avg_style_stat_loss,
     }
 
 
@@ -255,7 +295,11 @@ def main() -> None:
     image_size = args.image_size
     batch_size = args.batch_size
     num_workers = args.num_workers
+    lambda_content = args.lambda_content
     lambda_style = args.lambda_style
+    style_matrix_weight = args.style_matrix_weight
+    style_stat_weight = args.style_stat_weight
+    loss_use_smooth_l1 = args.loss_use_smooth_l1
     output_file = args.output_file
 
     if args.config is not None:
@@ -263,21 +307,30 @@ def main() -> None:
         image_size = image_size or int(get_optional(cfg, "image_size", 256))
         batch_size = batch_size or int(get_optional(cfg, "batch_size", 4))
         num_workers = num_workers or int(get_optional(cfg, "num_workers", 2))
-        lambda_style = lambda_style or float(get_optional(cfg, "lambda_style", 10.0))
+
+        lambda_content = float(get_optional(cfg, "lambda_content", lambda_content))
+        lambda_style = float(get_optional(cfg, "lambda_style", lambda_style))
+        style_matrix_weight = float(get_optional(cfg, "style_matrix_weight", style_matrix_weight))
+        style_stat_weight = float(get_optional(cfg, "style_stat_weight", style_stat_weight))
+        loss_use_smooth_l1 = bool(get_optional(cfg, "loss_use_smooth_l1", loss_use_smooth_l1))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("=" * 80)
     print("AdaIN Evaluate Test Loss")
     print("=" * 80)
-    print(f"Device       : {device}")
-    print(f"Checkpoint   : {checkpoint}")
-    print(f"Real root    : {real_root_dir}")
-    print(f"Split        : {split}")
-    print(f"Style domain : {style_domain}")
-    print(f"Image size   : {image_size}")
-    print(f"Batch size   : {batch_size}")
-    print(f"Num workers  : {num_workers}")
-    print(f"Lambda style : {lambda_style}")
+    print(f"Device              : {device}")
+    print(f"Checkpoint          : {checkpoint}")
+    print(f"Real root           : {real_root_dir}")
+    print(f"Split               : {split}")
+    print(f"Style domain        : {style_domain}")
+    print(f"Image size          : {image_size}")
+    print(f"Batch size          : {batch_size}")
+    print(f"Num workers         : {num_workers}")
+    print(f"Lambda content      : {lambda_content}")
+    print(f"Lambda style        : {lambda_style}")
+    print(f"Style matrix weight : {style_matrix_weight}")
+    print(f"Style stat weight   : {style_stat_weight}")
+    print(f"Use SmoothL1        : {loss_use_smooth_l1}")
     print("=" * 80)
 
     model = AdaINStyleTransfer().to(device)
@@ -299,7 +352,11 @@ def main() -> None:
         model=model,
         dataloader=dataloader,
         device=device,
+        lambda_content=lambda_content,
         lambda_style=lambda_style,
+        style_matrix_weight=style_matrix_weight,
+        style_stat_weight=style_stat_weight,
+        loss_use_smooth_l1=loss_use_smooth_l1,
     )
 
     result = {
@@ -310,7 +367,11 @@ def main() -> None:
         "image_size": image_size,
         "batch_size": batch_size,
         "num_workers": num_workers,
+        "lambda_content": lambda_content,
         "lambda_style": lambda_style,
+        "style_matrix_weight": style_matrix_weight,
+        "style_stat_weight": style_stat_weight,
+        "loss_use_smooth_l1": loss_use_smooth_l1,
         "checkpoint_best_loss": ckpt_meta.get("best_loss") if isinstance(ckpt_meta, dict) else None,
         "checkpoint_epoch": ckpt_meta.get("epoch") if isinstance(ckpt_meta, dict) else None,
         "metrics": metrics,
@@ -322,10 +383,12 @@ def main() -> None:
         json.dump(result, f, indent=2, ensure_ascii=False)
 
     print("\n[INFO] Hoàn tất evaluate test loss!")
-    print(f"[INFO] avg_total_loss   : {metrics['avg_total_loss']:.6f}")
-    print(f"[INFO] avg_content_loss : {metrics['avg_content_loss']:.6f}")
-    print(f"[INFO] avg_style_loss   : {metrics['avg_style_loss']:.6f}")
-    print(f"[INFO] Output file      : {output_path}")
+    print(f"[INFO] avg_total_loss         : {metrics['avg_total_loss']:.6f}")
+    print(f"[INFO] avg_content_loss       : {metrics['avg_content_loss']:.6f}")
+    print(f"[INFO] avg_style_loss         : {metrics['avg_style_loss']:.6f}")
+    print(f"[INFO] avg_style_matrix_loss  : {metrics['avg_style_matrix_loss']:.6f}")
+    print(f"[INFO] avg_style_stat_loss    : {metrics['avg_style_stat_loss']:.6f}")
+    print(f"[INFO] Output file            : {output_path}")
 
 
 if __name__ == "__main__":

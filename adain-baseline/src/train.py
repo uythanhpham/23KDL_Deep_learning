@@ -1,4 +1,3 @@
-# 23KDL_Deep_learning/adain-baseline/src/train.py
 """
 Train script theo hướng production-lite / Kaggle-friendly.
 
@@ -246,7 +245,11 @@ def main() -> None:
     model = AdaINStyleTransfer().to(device)
 
     lr = float(get_optional(cfg, "lr", 1e-4))
-    lambda_style = float(get_optional(cfg, "lambda_style", 10.0))
+    lambda_content = float(get_optional(cfg, "lambda_content", 1.0))
+    lambda_style = float(get_optional(cfg, "lambda_style", 3.0))
+    style_matrix_weight = float(get_optional(cfg, "style_matrix_weight", 1.0))
+    style_stat_weight = float(get_optional(cfg, "style_stat_weight", 0.25))
+    loss_use_smooth_l1 = bool(get_optional(cfg, "loss_use_smooth_l1", True))
     epochs = int(get_optional(cfg, "epochs", 5))
 
     use_early_stopping = bool(get_optional(cfg, "early_stopping", False))
@@ -260,7 +263,11 @@ def main() -> None:
     trainer = AdaINTrainer(
         model=model,
         optimizer=optimizer,
+        lambda_content=lambda_content,
         lambda_style=lambda_style,
+        style_matrix_weight=style_matrix_weight,
+        style_stat_weight=style_stat_weight,
+        loss_use_smooth_l1=loss_use_smooth_l1,
         device=device,
     )
 
@@ -268,9 +275,13 @@ def main() -> None:
         "train_epoch_losses": [],
         "train_epoch_content_losses": [],
         "train_epoch_style_losses": [],
+        "train_epoch_style_matrix_losses": [],
+        "train_epoch_style_stat_losses": [],
         "val_epoch_losses": [],
         "val_epoch_content_losses": [],
         "val_epoch_style_losses": [],
+        "val_epoch_style_matrix_losses": [],
+        "val_epoch_style_stat_losses": [],
         "epochs": epochs,
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -284,6 +295,8 @@ def main() -> None:
         epoch_total_loss = 0.0
         epoch_content_loss = 0.0
         epoch_style_loss = 0.0
+        epoch_style_matrix_loss = 0.0
+        epoch_style_stat_loss = 0.0
 
         epoch_start_time = time.time()
 
@@ -305,10 +318,14 @@ def main() -> None:
             total_loss = float(loss_dict["total_loss"])
             content_loss = float(loss_dict["content_loss"])
             style_loss = float(loss_dict["style_loss"])
+            style_matrix_loss = float(loss_dict["style_matrix_loss"])
+            style_stat_loss = float(loss_dict["style_stat_loss"])
 
             epoch_total_loss += total_loss
             epoch_content_loss += content_loss
             epoch_style_loss += style_loss
+            epoch_style_matrix_loss += style_matrix_loss
+            epoch_style_stat_loss += style_stat_loss
 
             log_every = int(get_optional(cfg, "log_every", 10))
             if batch_idx % log_every == 0 or batch_idx == len(train_dataloader):
@@ -317,13 +334,17 @@ def main() -> None:
                     f"Step [{batch_idx}/{len(train_dataloader)}] "
                     f"| total: {total_loss:.4f} "
                     f"| content: {content_loss:.4f} "
-                    f"| style: {style_loss:.4f}"
+                    f"| style: {style_loss:.4f} "
+                    f"| style_mat: {style_matrix_loss:.4f} "
+                    f"| style_stat: {style_stat_loss:.4f}"
                 )
 
         num_train_batches = len(train_dataloader)
         avg_train_total_loss = epoch_total_loss / num_train_batches
         avg_train_content_loss = epoch_content_loss / num_train_batches
         avg_train_style_loss = epoch_style_loss / num_train_batches
+        avg_train_style_matrix_loss = epoch_style_matrix_loss / num_train_batches
+        avg_train_style_stat_loss = epoch_style_stat_loss / num_train_batches
 
         # =====================
         # VALIDATION
@@ -332,6 +353,8 @@ def main() -> None:
         val_total_loss = 0.0
         val_content_loss = 0.0
         val_style_loss = 0.0
+        val_style_matrix_loss = 0.0
+        val_style_stat_loss = 0.0
 
         with torch.no_grad():
             for batch in val_dataloader:
@@ -355,20 +378,29 @@ def main() -> None:
                 val_total_loss += float(loss_dict["total_loss"])
                 val_content_loss += float(loss_dict["content_loss"])
                 val_style_loss += float(loss_dict["style_loss"])
+                val_style_matrix_loss += float(loss_dict["style_matrix_loss"])
+                val_style_stat_loss += float(loss_dict["style_stat_loss"])
 
         num_val_batches = len(val_dataloader)
         avg_val_total_loss = val_total_loss / num_val_batches
         avg_val_content_loss = val_content_loss / num_val_batches
         avg_val_style_loss = val_style_loss / num_val_batches
+        avg_val_style_matrix_loss = val_style_matrix_loss / num_val_batches
+        avg_val_style_stat_loss = val_style_stat_loss / num_val_batches
 
         epoch_time = time.time() - epoch_start_time
 
         history["train_epoch_losses"].append(avg_train_total_loss)
         history["train_epoch_content_losses"].append(avg_train_content_loss)
         history["train_epoch_style_losses"].append(avg_train_style_loss)
+        history["train_epoch_style_matrix_losses"].append(avg_train_style_matrix_loss)
+        history["train_epoch_style_stat_losses"].append(avg_train_style_stat_loss)
+
         history["val_epoch_losses"].append(avg_val_total_loss)
         history["val_epoch_content_losses"].append(avg_val_content_loss)
         history["val_epoch_style_losses"].append(avg_val_style_loss)
+        history["val_epoch_style_matrix_losses"].append(avg_val_style_matrix_loss)
+        history["val_epoch_style_stat_losses"].append(avg_val_style_stat_loss)
 
         print("-" * 80)
         print(
@@ -379,6 +411,10 @@ def main() -> None:
             f"| val_content: {avg_val_content_loss:.4f} "
             f"| train_style: {avg_train_style_loss:.4f} "
             f"| val_style: {avg_val_style_loss:.4f} "
+            f"| train_style_mat: {avg_train_style_matrix_loss:.4f} "
+            f"| val_style_mat: {avg_val_style_matrix_loss:.4f} "
+            f"| train_style_stat: {avg_train_style_stat_loss:.4f} "
+            f"| val_style_stat: {avg_val_style_stat_loss:.4f} "
             f"| time: {epoch_time:.2f}s"
         )
         print("-" * 80)

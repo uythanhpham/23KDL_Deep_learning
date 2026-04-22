@@ -9,7 +9,14 @@ num_workers: 2
 shuffle: true
 
 lr: 0.0001
-lambda_style: 10.0
+
+# ===== loss custom neo vào t =====
+lambda_content: 1.0
+lambda_style: 3.0
+style_matrix_weight: 1.0
+style_stat_weight: 0.25
+loss_use_smooth_l1: true
+
 epochs: 50
 log_every: 10
 
