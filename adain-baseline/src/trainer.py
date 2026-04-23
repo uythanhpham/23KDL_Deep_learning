@@ -22,7 +22,7 @@ class AdaINTrainer:
         train_style_feats  = self.model.encoder(train_style, return_all=True)
         train_style_feat   = train_style_feats[-1]
         t_train            = adain(train_content_feat, train_style_feat)
-        train_output       = self.model.decoder(t_train).clamp(0, 1)
+        train_output       = self.model.decoder(t_train)
         train_output_feats = self.model.encoder(train_output, return_all=True)
 
         train_total_loss, train_loss_c, train_loss_s = perceptual_loss(
@@ -40,7 +40,7 @@ class AdaINTrainer:
             valid_style_feats  = self.model.encoder(valid_style, return_all=True)
             valid_style_feat   = valid_style_feats[-1]
             t_valid            = adain(valid_content_feat, valid_style_feat)
-            valid_output       = self.model.decoder(t_valid).clamp(0, 1)
+            valid_output       = self.model.decoder(t_valid)
             valid_output_feats = self.model.encoder(valid_output, return_all=True)
 
             valid_total_loss, valid_loss_c, valid_loss_s = perceptual_loss(
@@ -56,4 +56,3 @@ class AdaINTrainer:
             "valid_content_loss": valid_loss_c.item(),
             "valid_style_loss":   valid_loss_s.item(),
         }
-        
