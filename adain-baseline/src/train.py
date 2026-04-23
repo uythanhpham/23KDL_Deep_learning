@@ -1,23 +1,3 @@
-"""
-Train script theo hướng production-lite / Kaggle-friendly.
-
-Chức năng:
-- Parse --config
-- Đọc config.yaml
-- Hỗ trợ mode = debug | real
-- Build train/val dataset riêng
-- Tạo dataloader
-- Khởi tạo model / optimizer / trainer
-- Train theo epoch
-- Validation theo epoch
-- Log train/val loss
-- Save checkpoint vào save_dir
-- Hỗ trợ early stopping khi val loss tăng liên tiếp
-
-Ví dụ:
-    python -m src.train --config configs/config.yaml
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -45,7 +25,7 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=str,
         required=True,
-        help="Đường dẫn tới file YAML config, ví dụ: configs/config.yaml",
+        help="Đường dẫn tới file YAML config, ví dụ: configs/config.yml",
     )
     return parser.parse_args()
 
@@ -115,7 +95,7 @@ def build_dataset_for_split(cfg: Dict[str, Any], split: str):
 
     if mode == "real":
         real_root_dir = get_required(cfg, "real_root_dir")
-        style_domain = get_optional(cfg, "style_domain", None)
+        style_domain = get_optional(cfg, "style_domain", "all")
 
         if hasattr(datasets_module, "build_real_dataset"):
             return datasets_module.build_real_dataset(
@@ -128,7 +108,7 @@ def build_dataset_for_split(cfg: Dict[str, Any], split: str):
         if hasattr(datasets_module, "build_dataset"):
             return datasets_module.build_dataset(
                 mode=mode,
-                root_dir=real_root_dir,
+                real_root_dir=real_root_dir,
                 split=split,
                 style_domain=style_domain,
                 image_size=image_size,
@@ -245,15 +225,14 @@ def main() -> None:
     model = AdaINStyleTransfer().to(device)
 
     lr = float(get_optional(cfg, "lr", 1e-4))
-    lambda_content = float(get_optional(cfg, "lambda_content", 1.0))
-    lambda_style = float(get_optional(cfg, "lambda_style", 3.0))
-    style_matrix_weight = float(get_optional(cfg, "style_matrix_weight", 1.0))
-    style_stat_weight = float(get_optional(cfg, "style_stat_weight", 0.25))
-    loss_use_smooth_l1 = bool(get_optional(cfg, "loss_use_smooth_l1", True))
+    lambda_mse = float(get_optional(cfg, "lambda_mse", 10.0))
+    lambda_l1 = float(get_optional(cfg, "lambda_l1", 0.5))
+    lambda_tv = float(get_optional(cfg, "lambda_tv", 1e-5))
     epochs = int(get_optional(cfg, "epochs", 5))
 
     use_early_stopping = bool(get_optional(cfg, "early_stopping", False))
     rise_patience = int(get_optional(cfg, "rise_patience", 3))
+    log_every = int(get_optional(cfg, "log_every", 10))
 
     prev_val_loss = None
     rise_counter = 0
@@ -263,27 +242,27 @@ def main() -> None:
     trainer = AdaINTrainer(
         model=model,
         optimizer=optimizer,
-        lambda_content=lambda_content,
-        lambda_style=lambda_style,
-        style_matrix_weight=style_matrix_weight,
-        style_stat_weight=style_stat_weight,
-        loss_use_smooth_l1=loss_use_smooth_l1,
+        lambda_mse=lambda_mse,
+        lambda_l1=lambda_l1,
+        lambda_tv=lambda_tv,
         device=device,
     )
 
     history: Dict[str, Any] = {
         "train_epoch_losses": [],
-        "train_epoch_content_losses": [],
-        "train_epoch_style_losses": [],
-        "train_epoch_style_matrix_losses": [],
-        "train_epoch_style_stat_losses": [],
+        "train_epoch_mse_losses": [],
+        "train_epoch_l1_losses": [],
+        "train_epoch_tv_losses": [],
         "val_epoch_losses": [],
-        "val_epoch_content_losses": [],
-        "val_epoch_style_losses": [],
-        "val_epoch_style_matrix_losses": [],
-        "val_epoch_style_stat_losses": [],
+        "val_epoch_mse_losses": [],
+        "val_epoch_l1_losses": [],
+        "val_epoch_tv_losses": [],
         "epochs": epochs,
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "lambda_mse": lambda_mse,
+        "lambda_l1": lambda_l1,
+        "lambda_tv": lambda_tv,
+        "lr": lr,
     }
 
     best_loss = float("inf")
@@ -292,11 +271,11 @@ def main() -> None:
 
     for epoch in range(1, epochs + 1):
         model.train()
+
         epoch_total_loss = 0.0
-        epoch_content_loss = 0.0
-        epoch_style_loss = 0.0
-        epoch_style_matrix_loss = 0.0
-        epoch_style_stat_loss = 0.0
+        epoch_mse_loss = 0.0
+        epoch_l1_loss = 0.0
+        epoch_tv_loss = 0.0
 
         epoch_start_time = time.time()
 
@@ -316,45 +295,40 @@ def main() -> None:
             loss_dict = trainer.train_step(content_images, style_images)
 
             total_loss = float(loss_dict["total_loss"])
-            content_loss = float(loss_dict["content_loss"])
-            style_loss = float(loss_dict["style_loss"])
-            style_matrix_loss = float(loss_dict["style_matrix_loss"])
-            style_stat_loss = float(loss_dict["style_stat_loss"])
+            mse_loss = float(loss_dict["mse_loss"])
+            l1_loss = float(loss_dict["l1_loss"])
+            tv_loss = float(loss_dict["tv_loss"])
 
             epoch_total_loss += total_loss
-            epoch_content_loss += content_loss
-            epoch_style_loss += style_loss
-            epoch_style_matrix_loss += style_matrix_loss
-            epoch_style_stat_loss += style_stat_loss
+            epoch_mse_loss += mse_loss
+            epoch_l1_loss += l1_loss
+            epoch_tv_loss += tv_loss
 
-            log_every = int(get_optional(cfg, "log_every", 10))
             if batch_idx % log_every == 0 or batch_idx == len(train_dataloader):
                 print(
                     f"[TRAIN] Epoch [{epoch}/{epochs}] "
                     f"Step [{batch_idx}/{len(train_dataloader)}] "
                     f"| total: {total_loss:.4f} "
-                    f"| content: {content_loss:.4f} "
-                    f"| style: {style_loss:.4f} "
-                    f"| style_mat: {style_matrix_loss:.4f} "
-                    f"| style_stat: {style_stat_loss:.4f}"
+                    f"| mse: {mse_loss:.4f} "
+                    f"| l1: {l1_loss:.4f} "
+                    f"| tv: {tv_loss:.6f}"
                 )
 
         num_train_batches = len(train_dataloader)
         avg_train_total_loss = epoch_total_loss / num_train_batches
-        avg_train_content_loss = epoch_content_loss / num_train_batches
-        avg_train_style_loss = epoch_style_loss / num_train_batches
-        avg_train_style_matrix_loss = epoch_style_matrix_loss / num_train_batches
-        avg_train_style_stat_loss = epoch_style_stat_loss / num_train_batches
+        avg_train_mse_loss = epoch_mse_loss / num_train_batches
+        avg_train_l1_loss = epoch_l1_loss / num_train_batches
+        avg_train_tv_loss = epoch_tv_loss / num_train_batches
 
         # =====================
         # VALIDATION
         # =====================
         model.eval()
+
         val_total_loss = 0.0
-        val_content_loss = 0.0
-        val_style_loss = 0.0
-        val_style_matrix_loss = 0.0
-        val_style_stat_loss = 0.0
+        val_mse_loss = 0.0
+        val_l1_loss = 0.0
+        val_tv_loss = 0.0
 
         with torch.no_grad():
             for batch in val_dataloader:
@@ -376,48 +350,46 @@ def main() -> None:
                 loss_dict = trainer.validate_step(content_images, style_images)
 
                 val_total_loss += float(loss_dict["total_loss"])
-                val_content_loss += float(loss_dict["content_loss"])
-                val_style_loss += float(loss_dict["style_loss"])
-                val_style_matrix_loss += float(loss_dict["style_matrix_loss"])
-                val_style_stat_loss += float(loss_dict["style_stat_loss"])
+                val_mse_loss += float(loss_dict["mse_loss"])
+                val_l1_loss += float(loss_dict["l1_loss"])
+                val_tv_loss += float(loss_dict["tv_loss"])
 
         num_val_batches = len(val_dataloader)
         avg_val_total_loss = val_total_loss / num_val_batches
-        avg_val_content_loss = val_content_loss / num_val_batches
-        avg_val_style_loss = val_style_loss / num_val_batches
-        avg_val_style_matrix_loss = val_style_matrix_loss / num_val_batches
-        avg_val_style_stat_loss = val_style_stat_loss / num_val_batches
+        avg_val_mse_loss = val_mse_loss / num_val_batches
+        avg_val_l1_loss = val_l1_loss / num_val_batches
+        avg_val_tv_loss = val_tv_loss / num_val_batches
 
         epoch_time = time.time() - epoch_start_time
 
         history["train_epoch_losses"].append(avg_train_total_loss)
-        history["train_epoch_content_losses"].append(avg_train_content_loss)
-        history["train_epoch_style_losses"].append(avg_train_style_loss)
-        history["train_epoch_style_matrix_losses"].append(avg_train_style_matrix_loss)
-        history["train_epoch_style_stat_losses"].append(avg_train_style_stat_loss)
+        history["train_epoch_mse_losses"].append(avg_train_mse_loss)
+        history["train_epoch_l1_losses"].append(avg_train_l1_loss)
+        history["train_epoch_tv_losses"].append(avg_train_tv_loss)
 
         history["val_epoch_losses"].append(avg_val_total_loss)
-        history["val_epoch_content_losses"].append(avg_val_content_loss)
-        history["val_epoch_style_losses"].append(avg_val_style_loss)
-        history["val_epoch_style_matrix_losses"].append(avg_val_style_matrix_loss)
-        history["val_epoch_style_stat_losses"].append(avg_val_style_stat_loss)
+        history["val_epoch_mse_losses"].append(avg_val_mse_loss)
+        history["val_epoch_l1_losses"].append(avg_val_l1_loss)
+        history["val_epoch_tv_losses"].append(avg_val_tv_loss)
 
         print("-" * 80)
         print(
             f"Epoch {epoch}/{epochs} hoàn tất "
             f"| train_total: {avg_train_total_loss:.4f} "
             f"| val_total: {avg_val_total_loss:.4f} "
-            f"| train_content: {avg_train_content_loss:.4f} "
-            f"| val_content: {avg_val_content_loss:.4f} "
-            f"| train_style: {avg_train_style_loss:.4f} "
-            f"| val_style: {avg_val_style_loss:.4f} "
-            f"| train_style_mat: {avg_train_style_matrix_loss:.4f} "
-            f"| val_style_mat: {avg_val_style_matrix_loss:.4f} "
-            f"| train_style_stat: {avg_train_style_stat_loss:.4f} "
-            f"| val_style_stat: {avg_val_style_stat_loss:.4f} "
+            f"| train_mse: {avg_train_mse_loss:.4f} "
+            f"| val_mse: {avg_val_mse_loss:.4f} "
+            f"| train_l1: {avg_train_l1_loss:.4f} "
+            f"| val_l1: {avg_val_l1_loss:.4f} "
+            f"| train_tv: {avg_train_tv_loss:.6f} "
+            f"| val_tv: {avg_val_tv_loss:.6f} "
             f"| time: {epoch_time:.2f}s"
         )
         print("-" * 80)
+
+        is_best = avg_val_total_loss < best_loss
+        if is_best:
+            best_loss = avg_val_total_loss
 
         # Save checkpoint từng epoch
         epoch_ckpt_path = save_dir / f"adain_epoch_{epoch:03d}.pth"
@@ -444,8 +416,7 @@ def main() -> None:
         )
 
         # Save best checkpoint theo val loss
-        if avg_val_total_loss < best_loss:
-            best_loss = avg_val_total_loss
+        if is_best:
             best_ckpt_path = save_dir / "best.pth"
             save_checkpoint(
                 save_path=best_ckpt_path,
