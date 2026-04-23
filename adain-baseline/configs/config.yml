@@ -1,26 +1,23 @@
 mode: real
-real_root_dir: "/content/drive/MyDrive/Năm 3 kì 2/TH DL/project/AdaIn/2_data/processed"
+real_root_dir: 'E:/Nam3_ki2/TH DL/PROJECT/23KDL_Deep_learning/data/processed'
 split: train
-style_domain: anime
+style_domain: sketch
 image_size: 256
 
-batch_size: 4
-num_workers: 2
+batch_size: 2
+num_workers: 0
 shuffle: true
 
 lr: 0.0001
 
-# ===== loss custom neo vào t =====
-lambda_content: 1.0
-lambda_style: 3.0
-style_matrix_weight: 1.0
-style_stat_weight: 0.25
-loss_use_smooth_l1: true
+lambda_mse: 10.0
+lambda_l1: 0.5
+lambda_tv: 1.0e-5
 
 epochs: 50
 log_every: 10
 
-save_dir: "/content/drive/MyDrive/Năm 3 kì 2/TH DL/project/AdaIn/checkpoints"
+save_dir: 'E:/Nam3_ki2/TH DL/PROJECT/23KDL_Deep_learning/adain-baseline/checkpoints'
 
 seed: 42
 
