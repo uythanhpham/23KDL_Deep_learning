@@ -74,7 +74,7 @@ def main():
                 # FIX: Denormalize trước khi lưu
                 output = denormalize(output, device)
                 # Clamp để tránh noise (giá trị vượt quá 0-1)
-                output = torch.clamp(output, 0, 1)
+                #output = torch.clamp(output, 0, 1) bỏ dòng này sau debug
 
                 out_name = f"result_{Path(c_name).stem}_{Path(s_name).stem}.jpg"
                 save_image(output, os.path.join(args.output_dir, out_name), normalize=False)
