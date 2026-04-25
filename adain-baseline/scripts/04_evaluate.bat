@@ -1,30 +1,23 @@
 @echo off
 chcp 65001 >nul
-:: [GĐ 4] Giai đoạn 4 — Chuẩn hóa entrypoint Evaluate (Windows)
 
 echo =========================================
-echo [GĐ 4] Bắt đầu chạy Evaluate Smoke Test
+echo [GĐ 8] Bắt đầu tính toán Metrics (SSIM, LPIPS)
 echo =========================================
 
-:: --- CẤU HÌNH ĐƯỜNG DẪN ---
-set CONFIG_FILE=configs/config.yaml
-set PRED_DIR=outputs/infer_smoke
-set REF_DIR=debug_data
-set OUTPUT_FILE=outputs/eval/metrics_smoke.json
+:: --- THIẾT LẬP MÔI TRƯỜNG ---
+:: Đảm bảo Python nhận diện được thư mục src
+set PYTHONPATH=.
 
 :: --- LỆNH CHẠY ---
-python -m src.evaluate ^
-    --config "%CONFIG_FILE%" ^
-    --pred_dir "%PRED_DIR%" ^
-    --ref_dir "%REF_DIR%" ^
-    --output_file "%OUTPUT_FILE%"
+python -m src.evaluate
 
 if %ERRORLEVEL% NEQ 0 (
-    echo [Lỗi] Quá trình chạy bị dừng do có lỗi!
+    echo [Lỗi] Quá trình đánh giá bị dừng do có lỗi!
     exit /b %ERRORLEVEL%
 )
 
 echo =========================================
-echo [Thành công] Hoàn tất quá trình Đánh giá!
-echo Báo cáo được lưu tại: %OUTPUT_FILE%
+echo [Thành công] Đánh giá hoàn tất!
+echo Xem kết quả tại: outputs/eval/metrics.json
 echo =========================================
