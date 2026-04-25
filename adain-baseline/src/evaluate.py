@@ -10,7 +10,7 @@ from skimage.metrics import mean_squared_error
 import lpips
 
 # Import từ local
-from src.models.adain import AdaIN
+from src.models.adain import AdaINStyleTransfer as AdaIN
 
 def calculate_metrics(pred_path, ref_path, lpips_fn, device):
     transform = transforms.Compose([
