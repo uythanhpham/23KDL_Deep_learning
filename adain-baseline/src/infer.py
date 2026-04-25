@@ -5,7 +5,7 @@ from PIL import Image
 from pathlib import Path
 from torchvision import transforms
 from torchvision.utils import save_image
-from adain_baseline.src.models.adain import AdaINStyleTransfer as AdaIN
+from src.models.adain import AdaINStyleTransfer as AdaIN
 
 # Định nghĩa các hằng số chuẩn của ImageNet
 MEAN = [0.485, 0.456, 0.406]
