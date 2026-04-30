@@ -1,45 +1,29 @@
+"Content/style perceptual loss cho AdaIN."
+from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
+def calc_mean_std(feat: torch.Tensor, eps: float = 1e-5) -> tuple[torch.Tensor, torch.Tensor]:
+    b, c = feat.shape[:2]
+    feat_var = feat.view(b, c, -1).var(dim=2, unbiased=False) + eps
+    feat_std = feat_var.sqrt().view(b, c, 1, 1)
+    feat_mean = feat.view(b, c, -1).mean(dim=2).view(b, c, 1, 1)
+    return feat_mean, feat_std
 
-def total_variation_loss(img: torch.Tensor) -> torch.Tensor:
-    # img: [B, C, H, W]
-    loss_h = torch.mean(torch.abs(img[:, :, 1:, :] - img[:, :, :-1, :]))
-    loss_w = torch.mean(torch.abs(img[:, :, :, 1:] - img[:, :, :, :-1]))
-    return loss_h + loss_w
+def content_loss(output_feat: torch.Tensor, target_feat: torch.Tensor) -> torch.Tensor:
+    return F.mse_loss(output_feat, target_feat)
 
+def style_loss(output_feats, style_feats) -> torch.Tensor:
+    loss = 0.0
+    for out_f, style_f in zip(output_feats, style_feats):
+        out_mean, out_std = calc_mean_std(out_f)
+        style_mean, style_std = calc_mean_std(style_f)
+        loss = loss + F.mse_loss(out_mean, style_mean)
+        loss = loss + F.mse_loss(out_std, style_std)
+    return loss
 
-def adain_target_reconstruction_loss(
-    encoder,
-    output_img: torch.Tensor,
-    t: torch.Tensor,
-    lambda_mse: float = 10.0,
-    lambda_l1: float = 0.5,
-    lambda_tv: float = 1e-5,
-):
-    """
-    Mục tiêu:
-        z = encoder(output_img)
-        ép z ~= t
-
-    output_img: ảnh decoder sinh ra, shape [B, 3, H, W]
-    t: AdaIN target feature, shape [B, C, h, w]
-    """
-
-    # encode lại ảnh generate về cùng feature space với t
-    z = encoder(output_img)
-
-    # target feature không cho backprop ngược vào nhánh target
-    t_det = t.detach()
-
-    loss_mse = F.mse_loss(z, t_det)
-    loss_l1 = F.l1_loss(z, t_det)
-    loss_tv = total_variation_loss(output_img)
-
-    total_loss = (
-        lambda_mse * loss_mse
-        + lambda_l1 * loss_l1
-        + lambda_tv * loss_tv
-    )
-
-    return total_loss, loss_mse, loss_l1, loss_tv
+def perceptual_loss(output_feats, style_feats, adain_target_feat: torch.Tensor, lambda_style: float = 10.0):
+    c_loss = content_loss(output_feats[-1], adain_target_feat)
+    s_loss = style_loss(output_feats, style_feats)
+    total = c_loss + lambda_style * s_loss
+    return total, c_loss, s_loss
