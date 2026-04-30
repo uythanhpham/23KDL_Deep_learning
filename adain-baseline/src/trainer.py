@@ -1,73 +1,117 @@
+"""Memory-safe Trainer cho AdaIN decoder."""
+
+from __future__ import annotations
+
+import gc
+from contextlib import nullcontext
 import torch
+
 from src.models.adain import adain
-from src.losses.perceptual import adain_target_reconstruction_loss
+from src.losses.perceptual import perceptual_loss
 
 
 class AdaINTrainer:
-    def __init__(
-        self,
-        model,
-        optimizer,
-        lambda_mse=10.0,
-        lambda_l1=0.5,
-        lambda_tv=1e-5,
-        device="cpu",
-    ):
+    def __init__(self, model, optimizer, lambda_style=10.0, device="cpu", use_amp=True):
         self.model = model.to(device)
         self.optimizer = optimizer
-        self.lambda_mse = lambda_mse
-        self.lambda_l1 = lambda_l1
-        self.lambda_tv = lambda_tv
-        self.device = device
+        self.lambda_style = lambda_style
+        self.device = torch.device(device)
+        self.use_amp = bool(use_amp and self.device.type == "cuda")
 
-    def _forward_and_compute_loss(self, content, style):
-        # 1) encode content/style
-        content_feat = self.model.encoder(content)   # [B, 512, H/8, W/8]
-        style_feat = self.model.encoder(style)       # [B, 512, H/8, W/8]
+        self.model.encoder.eval()
+        for p in self.model.encoder.parameters():
+            p.requires_grad = False
 
-        # 2) AdaIN target
-        t = adain(content_feat, style_feat)
+        if self.use_amp:
+            try:
+                self.scaler = torch.amp.GradScaler("cuda", enabled=True)
+            except TypeError:
+                self.scaler = torch.cuda.amp.GradScaler(enabled=True)
+        else:
+            self.scaler = None
 
-        # 3) decode
-        output = self.model.decoder(t).clamp(0, 1)
-
-        # 4) loss mới: encode lại output và ép sát t
-        total_loss, loss_mse, loss_l1, loss_tv = adain_target_reconstruction_loss(
-            encoder=self.model.encoder,
-            output_img=output,
-            t=t,
-            lambda_mse=self.lambda_mse,
-            lambda_l1=self.lambda_l1,
-            lambda_tv=self.lambda_tv,
-        )
-
-        return total_loss, loss_mse, loss_l1, loss_tv
+    def _autocast(self):
+        if not self.use_amp:
+            return nullcontext()
+        try:
+            return torch.amp.autocast("cuda", enabled=True)
+        except TypeError:
+            return torch.cuda.amp.autocast(enabled=True)
 
     def train_step(self, content, style):
-        self.model.train()
-        self.optimizer.zero_grad()
+        self.model.decoder.train()
+        content = content.to(self.device, non_blocking=False)
+        style = style.to(self.device, non_blocking=False)
+        self.optimizer.zero_grad(set_to_none=True)
 
-        total_loss, loss_mse, loss_l1, loss_tv = self._forward_and_compute_loss(content, style)
+        with self._autocast():
+            with torch.no_grad():
+                content_feat = self.model.encoder(content)
+                style_feats = self.model.encoder(style, return_all=True)
+                style_feat = style_feats[-1]
+                target = adain(content_feat, style_feat).detach()
+                style_feats = tuple(f.detach() for f in style_feats)
 
-        total_loss.backward()
-        self.optimizer.step()
+            output = self.model.decoder(target)
+            output_feats = self.model.encoder(output, return_all=True)
+            total_loss, c_loss, s_loss = perceptual_loss(
+                output_feats=output_feats,
+                style_feats=style_feats,
+                adain_target_feat=target,
+                lambda_style=self.lambda_style,
+            )
 
-        return {
-            "total_loss": total_loss.item(),
-            "mse_loss": loss_mse.item(),
-            "l1_loss": loss_l1.item(),
-            "tv_loss": loss_tv.item(),
+        if self.use_amp:
+            self.scaler.scale(total_loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            total_loss.backward()
+            self.optimizer.step()
+
+        result = {
+            "total_loss": float(total_loss.detach().item()),
+            "content_loss": float(c_loss.detach().item()),
+            "style_loss": float(s_loss.detach().item()),
         }
+
+        del content, style, content_feat, style_feats, style_feat, target
+        del output, output_feats, total_loss, c_loss, s_loss
+        return result
 
     @torch.no_grad()
-    def validate_step(self, content, style):
-        self.model.eval()
+    def val_step(self, content, style):
+        self.model.decoder.eval()
+        content = content.to(self.device, non_blocking=False)
+        style = style.to(self.device, non_blocking=False)
 
-        total_loss, loss_mse, loss_l1, loss_tv = self._forward_and_compute_loss(content, style)
+        with self._autocast():
+            content_feat = self.model.encoder(content)
+            style_feats = self.model.encoder(style, return_all=True)
+            style_feat = style_feats[-1]
+            target = adain(content_feat, style_feat)
 
-        return {
-            "total_loss": total_loss.item(),
-            "mse_loss": loss_mse.item(),
-            "l1_loss": loss_l1.item(),
-            "tv_loss": loss_tv.item(),
+            output = self.model.decoder(target)
+            output_feats = self.model.encoder(output, return_all=True)
+            total_loss, c_loss, s_loss = perceptual_loss(
+                output_feats=output_feats,
+                style_feats=style_feats,
+                adain_target_feat=target,
+                lambda_style=self.lambda_style,
+            )
+
+        result = {
+            "total_loss": float(total_loss.detach().item()),
+            "content_loss": float(c_loss.detach().item()),
+            "style_loss": float(s_loss.detach().item()),
         }
+
+        del content, style, content_feat, style_feats, style_feat, target
+        del output, output_feats, total_loss, c_loss, s_loss
+        return result
+
+
+def cleanup_cuda():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
