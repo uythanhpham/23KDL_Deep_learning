@@ -1,0 +1,23 @@
+import os
+import yaml
+
+os.makedirs("configs", exist_ok=True)
+
+sample_dict = {
+    "sample": {
+        "checkpoint": "checkpoints/best_model.pth",
+        "content_path": "debug_data/content", # Đường dẫn tới ảnh/thư mục ảnh gốc (để mượn cấu trúc)
+        "style_path": "debug_data/style",     # Đường dẫn tới ảnh/thư mục ảnh style (để mượn phong cách)
+        "output_dir": "outputs/samples",
+        "mode": "content_to_stylized",        # Mode: Bắt đầu từ ảnh gốc có chút nhiễu rồi khử nhiễu (Img2Img). Hoặc "noise_to_stylized" (Txt2Img thuần tuý)
+        "sampler": "ddim",
+        "ddim_steps": 50,
+        "seed": 0,
+        "save_grid": True
+    }
+}
+
+with open("configs/sample.yaml", "w", encoding="utf-8") as f:
+    yaml.dump(sample_dict, f, default_flow_style=False, sort_keys=False)
+
+print("DONE: Đã tạo configs/sample.yaml")

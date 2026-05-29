@@ -1,0 +1,40 @@
+import os
+import yaml
+
+os.makedirs("configs", exist_ok=True)
+
+train_dict = {
+    "data": {
+        "content_dir": "debug_data/content", # Thư mục chứa ảnh cấu trúc (ảnh gốc cần biến đổi)
+        "style_dir": "debug_data/style",     # Thư mục chứa ảnh phong cách (texture/màu sắc muốn học)
+        "image_size": 64,
+        "batch_size": 4,
+        "num_workers": 2,
+        "val_split": 0.1
+    },
+    "train": {
+        "epochs": 50,
+        "lr": 2.0e-4,
+        "grad_clip": 1.0,
+        "mixed_precision": False,
+        "ema_decay": 0.9999,
+        "log_every": 10,
+        "save_every": 5,
+        "checkpoint_dir": "checkpoints",
+        "seed": 42
+    },
+    "loss_weights": {
+        "noise": 1.0,    # Trọng số cho hàm loss chính của DDPM (MSE giữa nhiễu dự đoán và nhiễu thực tế)
+        "style": 0.1,    # Trọng số ép mô hình học phong cách (dựa trên Gram matrix của feature maps)
+        "content": 0.01  # Trọng số ép mô hình giữ lại cấu trúc ban đầu của ảnh (dựa trên VGG features)
+    },
+    "early_stopping": {
+        "patience": 10,
+        "min_delta": 1.0e-4
+    }
+}
+
+with open("configs/train.yaml", "w", encoding="utf-8") as f:
+    yaml.dump(train_dict, f, default_flow_style=False, sort_keys=False)
+
+print("DONE: Đã tạo configs/train.yaml")

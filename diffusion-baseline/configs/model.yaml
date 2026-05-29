@@ -1,0 +1,26 @@
+model:
+  in_channels: 3
+  base_channels: 64
+  channel_mults:
+  - 1
+  - 2
+  - 4
+  num_res_blocks: 2
+  attention_resolutions:
+  - 16
+  dropout: 0.1
+  style_dim: 512
+style_encoder:
+  style_dim: 512
+  style_layers:
+  - 3
+  - 8
+  - 17
+  - 26
+  content_layers:
+  - 17
+diffusion:
+  num_timesteps: 1000
+  beta_schedule: linear
+  beta_start: 0.0001
+  beta_end: 0.02
