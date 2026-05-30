@@ -3,22 +3,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from typing import List, Dict
+from torch.cuda.amp import autocast
 
 def gram_matrix(feat: torch.Tensor) -> torch.Tensor:
     """
     Tính ma trận Gram (Gram Matrix) của một feature map.
-    Dùng để triệt tiêu thông tin không gian (spatial) và chỉ giữ lại 
-    thông tin tương quan giữa các kênh (channels) -> đại diện cho Texture/Style.
     """
-    feat = feat.float()
-    B, C, H, W = feat.shape
-    # Reshape: (B, C, H, W) -> (B, C, H*W)
-    feat_reshaped = feat.view(B, C, H * W)
-    # Nhân ma trận với ma trận chuyển vị của nó (B, C, H*W) x (B, H*W, C) -> (B, C, C)
-    G = torch.bmm(feat_reshaped, feat_reshaped.transpose(1, 2))
-    # Chuẩn hóa để tránh giá trị quá lớn
-    return G / (C * H * W)
-
+    # Bọc bằng context tắt autocast để bắt buộc tính toán trên float32 an toàn
+    with autocast(enabled=False):
+        feat = feat.float()
+        B, C, H, W = feat.shape
+        # Reshape: (B, C, H, W) -> (B, C, H*W)
+        feat_reshaped = feat.view(B, C, H * W)
+        # Nhân ma trận với ma trận chuyển vị của nó (B, C, H*W) x (B, H*W, C) -> (B, C, C)
+        G = torch.bmm(feat_reshaped, feat_reshaped.transpose(1, 2))
+        # Chuẩn hóa để tránh giá trị quá lớn
+        return G / (C * H * W)
 
 class VGGFeatureExtractor(nn.Module):
     """
