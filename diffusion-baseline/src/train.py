@@ -12,6 +12,32 @@ from src.models.style_encoder import StyleEncoder
 from src.diffusion.scheduler import DDPMScheduler
 from src.trainers.trainer import DiffusionTrainer
 
+
+
+import logging
+
+def setup_logger(log_file="checkpoints/training.log"):
+    """Thiết lập logger để ghi đồng thời ra console và file."""
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    logger = logging.getLogger("DiffusionTrain")
+    logger.setLevel(logging.INFO)
+    
+    if logger.hasHandlers():
+        logger.handlers.clear()
+        
+    formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    
+    file_handler = logging.FileHandler(log_file, mode='a')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+logger = setup_logger()
 # =====================================================================
 # CLASS: EARLY STOPPING (Cơ chế dừng sớm)
 # =====================================================================
@@ -157,51 +183,50 @@ def main():
     print("BẮT ĐẦU VÒNG LẶP HUẤN LUYỆN")
     print("="*50 + "\n")
     
-    # 11. Vòng lặp Epoch
+   # 11. Vòng lặp Epoch
     for epoch in range(1, epochs + 1):
-        # -------------------------------------------------------------
-        # HUẤN LUYỆN (TRAINING)
-        # -------------------------------------------------------------
+        # --- TRAINING ---
         train_losses = []
         for step_i, batch in enumerate(train_loader):
             r = trainer.train_step(batch)
             train_losses.append(r["train_loss"])
             
-            # Log tiến độ theo từng cụm step
             if (step_i + 1) % log_every == 0:
-                print(f"[E{epoch}/{epochs}] S{step_i+1}/{tl_len} "
+                logger.info(f"[E{epoch}/{epochs}] S{step_i+1}/{tl_len} "
                       f"| Total:{r['train_loss']:.4f} | Noise:{r['noise_loss']:.4f} "
                       f"| Style:{r['style_loss']:.4f} | Content:{r['content_loss']:.4f} "
                       f"| Grad:{r['grad_norm']:.3f}")
                       
         avg_train = sum(train_losses) / len(train_losses)
         
-        # -------------------------------------------------------------
-        # ĐÁNH GIÁ (VALIDATION)
-        # -------------------------------------------------------------
+        # --- VALIDATION ---
         if val_loader is not None and len(val_loader) > 0:
             val_losses = [trainer.val_step(b)["val_loss"] for b in val_loader]
             avg_val = sum(val_losses) / len(val_losses)
+            monitor_loss = avg_val
+            logger.info(f"\n[Epoch {epoch}] Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f}\n")
         else:
-            avg_val = 0.0 # Bỏ qua nếu không dùng tập validation
-            
-        # Log tóm tắt kết thúc Epoch
-        print(f"\n[Epoch {epoch}] Train:{avg_train:.4f} | Val:{avg_val:.4f}\n")
+            # Sửa lỗi: Nếu không có val_loader, dùng avg_train để theo dõi Early Stop
+            monitor_loss = avg_train
+            logger.info(f"\n[Epoch {epoch}] Train Loss: {avg_train:.4f} | (No Validation)\n")
         
-        # -------------------------------------------------------------
-        # LƯU CHECKPOINT VÀ KIỂM TRA EARLY STOPPING
-        # -------------------------------------------------------------
+        # --- CHECKPOINT & EARLY STOPPING ---
         if epoch % save_every == 0:
             ckpt_path = os.path.join(cfg["train"]["checkpoint_dir"], f"epoch_{epoch:04d}.pth")
             trainer.save_checkpoint(ckpt_path, epoch)
-            print(f"[*] Đã lưu checkpoint định kỳ tại: {ckpt_path}")
+            logger.info(f"[*] Đã lưu checkpoint định kỳ: {ckpt_path}")
             
-        # Kiểm tra Early Stopping bằng EMA Model (vì EMA model cho chất lượng ảnh tốt hơn mô hình thường)
-        if early_stop.step(avg_val, trainer.ema_model):
-            print(f"\n[!] Kích hoạt Early Stopping tại Epoch {epoch}. Ngừng huấn luyện để tránh Overfitting!")
+        # Truyền monitor_loss (chứa val_loss hoặc train_loss) vào Early Stop
+        if early_stop.step(monitor_loss, trainer.ema_model):
+            logger.info(f"\n[!] Kích hoạt Early Stopping tại Epoch {epoch}. Ngừng huấn luyện!")
             break
             
-    print("\nHoàn thành huấn luyện!")
+    # Đảm bảo luôn lưu model cuối cùng dù chạy hết vòng lặp hay bị ngắt
+    final_path = os.path.join(cfg["train"]["checkpoint_dir"], "last_model.pth")
+    trainer.save_checkpoint(final_path, epoch)
+    logger.info(f"[*] Đã lưu mô hình cuối cùng: {final_path}")
+    
+    logger.info("\n✅ Hoàn thành quá trình huấn luyện!")
 
 if __name__ == "__main__":
     main()
