@@ -4,13 +4,14 @@ import torch.nn.functional as F
 import torchvision.models as models
 from typing import List, Dict
 from torch.cuda.amp import autocast
+from torch.amp import autocast
 
 def gram_matrix(feat: torch.Tensor) -> torch.Tensor:
     """
     Tính ma trận Gram (Gram Matrix) của một feature map.
     """
     # Bọc bằng context tắt autocast để bắt buộc tính toán trên float32 an toàn
-    with autocast(enabled=False):
+    with autocast('cuda', enabled=False):
         feat = feat.float()
         B, C, H, W = feat.shape
         # Reshape: (B, C, H, W) -> (B, C, H*W)

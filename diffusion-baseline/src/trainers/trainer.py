@@ -4,6 +4,7 @@ import torch.nn.functional as F                          # ← thêm import F
 from torch.nn.utils import clip_grad_norm_
 from torch.cuda.amp import GradScaler, autocast
 from src.losses.diffusion_loss import style_diffusion_loss
+from torch.amp import GradScaler, autocast
 
 class DiffusionTrainer:
     def __init__(self, model, style_encoder, scheduler, optimizer,
@@ -18,7 +19,7 @@ class DiffusionTrainer:
         self.grad_clip      = grad_clip
         self.ema_decay      = ema_decay
         self.mixed_precision = mixed_precision               # ← lưu lại
-        self.scaler         = GradScaler(enabled=mixed_precision)  # ← khởi tạo ở đây
+        self.scaler         = GradScaler('cuda', enabled=mixed_precision)  # ← khởi tạo ở đây
 
         if loss_weights is None:
             self.loss_weights = {"noise": 1.0, "style": 0.1, "content": 0.01}
@@ -44,7 +45,7 @@ class DiffusionTrainer:
         self.model.train()
         self.optimizer.zero_grad()
 
-        with autocast(enabled=self.mixed_precision):
+        with autocast('cuda',enabled=self.mixed_precision):
             total_loss, info = style_diffusion_loss(
                 model=self.model,
                 style_encoder=self.style_encoder,
