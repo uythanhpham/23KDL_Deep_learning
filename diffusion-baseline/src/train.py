@@ -92,8 +92,8 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
 
 def load_config(train_yaml: str, model_yaml: str) -> dict:
     """Tải và gộp cấu hình từ 2 file YAML."""
@@ -113,120 +113,108 @@ def load_config(train_yaml: str, model_yaml: str) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Huấn luyện Style-guided Diffusion")
     parser.add_argument("--train_config", type=str, default="configs/train.yaml")
-    parser.add_argument("--model_config", type=str, default="configs/model.yaml")
+    parser.add_argument("--model_config",  type=str, default="configs/model.yaml")
     args = parser.parse_args()
 
-    # 1. Load config
-    cfg = load_config(args.train_config, args.model_config)
-    
-    # 2. Set seed để tái lập
+    # 1. Load config TRƯỚC — các bước khác phụ thuộc vào cfg
+    cfg = load_config(args.train_config, args.model_config)   # ← cfg load trước tiên
+
+    # 2. Set seed
     set_seed(cfg["train"]["seed"])
-    
-    # 3. Chọn Device
+
+    # 3. Device
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[*] Khởi động quá trình huấn luyện trên thiết bị: {device.upper()}")
-    
-    # 4. Khởi tạo DataLoaders
+    print(f"[*] Thiết bị: {device.upper()}")
+
+    # 4. DataLoaders
     train_loader, val_loader = build_dataloaders(
-        content_dir=cfg["data"]["content_dir"],
-        style_dir=cfg["data"]["style_dir"],
-        image_size=cfg["data"]["image_size"],
-        batch_size=cfg["data"]["batch_size"],
-        val_split=cfg["data"]["val_split"],
-        num_workers=cfg["data"]["num_workers"],
-        seed=cfg["train"]["seed"]
+        content_dir = cfg["data"]["content_dir"],
+        style_dir   = cfg["data"]["style_dir"],
+        image_size  = cfg["data"]["image_size"],
+        batch_size  = cfg["data"]["batch_size"],
+        val_split   = cfg["data"]["val_split"],
+        num_workers = cfg["data"]["num_workers"],
+        seed        = cfg["train"]["seed"],
     )
-    
-    # Đảm bảo thư mục lưu checkpoint tồn tại
     os.makedirs(cfg["train"]["checkpoint_dir"], exist_ok=True)
-    
-    # 5. Khởi tạo UNet
-    model = UNet(**cfg["model"]).to(device)
-    
-    # 6. Khởi tạo Style Encoder (Luôn để ở chế độ eval)
+
+    # 5-7. Models + Scheduler
+    model         = UNet(**cfg["model"]).to(device)
     style_encoder = StyleEncoder(**cfg["style_encoder"]).to(device)
     style_encoder.eval()
-    
-    # 7. Khởi tạo Scheduler (Định thời Diffusion)
-    scheduler = DDPMScheduler(**cfg["diffusion"], device=device)
-    
-    # 8. Khởi tạo Optimizer (Chỉ tối ưu trọng số của UNet)
-    optimizer = Adam(model.parameters(), lr=float(cfg["train"]["lr"]))
-    
-    # 9. Khởi tạo Trainer
+    scheduler     = DDPMScheduler(**cfg["diffusion"], device=device)
+    optimizer     = Adam(model.parameters(), lr=float(cfg["train"]["lr"]))
+
+    # 8. Trainer — truyền mixed_precision vào đây, không tạo scaler ở ngoài
     trainer = DiffusionTrainer(
-        model=model,
-        style_encoder=style_encoder,
-        scheduler=scheduler,
-        optimizer=optimizer,
-        device=device,
-        grad_clip=cfg["train"]["grad_clip"],
-        ema_decay=cfg["train"]["ema_decay"],
-        loss_weights=cfg["loss_weights"]
+        model            = model,
+        style_encoder    = style_encoder,
+        scheduler        = scheduler,
+        optimizer        = optimizer,
+        device           = device,
+        grad_clip        = cfg["train"]["grad_clip"],
+        ema_decay        = cfg["train"]["ema_decay"],
+        loss_weights     = cfg["loss_weights"],
+        mixed_precision  = cfg["train"]["mixed_precision"],  # ← truyền vào trainer
     )
-    
-    # 10. Khởi tạo Early Stopping
+
+    # 9. Early Stopping
     best_model_path = os.path.join(cfg["train"]["checkpoint_dir"], "best_model.pth")
     early_stop = EarlyStopping(
-        patience=cfg["early_stopping"]["patience"],
-        min_delta=float(cfg["early_stopping"]["min_delta"]),
-        save_path=best_model_path
+        patience  = cfg["early_stopping"]["patience"],
+        min_delta = float(cfg["early_stopping"]["min_delta"]),
+        save_path = best_model_path,
     )
-    
-    # Lấy các thiết lập vòng lặp từ config
-    epochs = cfg["train"]["epochs"]
+
+    epochs    = cfg["train"]["epochs"]
     log_every = cfg["train"]["log_every"]
-    save_every = cfg["train"]["save_every"]
-    tl_len = len(train_loader)
-    
+    save_every= cfg["train"]["save_every"]
+    tl_len    = len(train_loader)
+
     print("\n" + "="*50)
     print("BẮT ĐẦU VÒNG LẶP HUẤN LUYỆN")
     print("="*50 + "\n")
-    
-   # 11. Vòng lặp Epoch
+
     for epoch in range(1, epochs + 1):
-        # --- TRAINING ---
+        # Train
         train_losses = []
         for step_i, batch in enumerate(train_loader):
-            r = trainer.train_step(batch)
+            r = trainer.train_step(batch)   # ← KHÔNG wrap autocast ở đây nữa
             train_losses.append(r["train_loss"])
-            
             if (step_i + 1) % log_every == 0:
-                logger.info(f"[E{epoch}/{epochs}] S{step_i+1}/{tl_len} "
-                      f"| Total:{r['train_loss']:.4f} | Noise:{r['noise_loss']:.4f} "
-                      f"| Style:{r['style_loss']:.4f} | Content:{r['content_loss']:.4f} "
-                      f"| Grad:{r['grad_norm']:.3f}")
-                      
+                logger.info(
+                    f"[E{epoch}/{epochs}] S{step_i+1}/{tl_len} "
+                    f"| Total:{r['train_loss']:.4f} | Noise:{r['noise_loss']:.4f} "
+                    f"| Style:{r['style_loss']:.4f} | Content:{r['content_loss']:.4f} "
+                    f"| Grad:{r['grad_norm']:.3f}"
+                )
+
         avg_train = sum(train_losses) / len(train_losses)
-        
-        # --- VALIDATION ---
-        if val_loader is not None and len(val_loader) > 0:
-            val_losses = [trainer.val_step(b)["val_loss"] for b in val_loader]
-            avg_val = sum(val_losses) / len(val_losses)
+
+        # Validation
+        if val_loader and len(val_loader) > 0:
+            val_losses   = [trainer.val_step(b)["val_loss"] for b in val_loader]
+            avg_val      = sum(val_losses) / len(val_losses)
             monitor_loss = avg_val
-            logger.info(f"\n[Epoch {epoch}] Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f}\n")
+            logger.info(f"\n[Epoch {epoch}] Train: {avg_train:.4f} | Val: {avg_val:.4f}\n")
         else:
-            # Sửa lỗi: Nếu không có val_loader, dùng avg_train để theo dõi Early Stop
             monitor_loss = avg_train
-            logger.info(f"\n[Epoch {epoch}] Train Loss: {avg_train:.4f} | (No Validation)\n")
-        
-        # --- CHECKPOINT & EARLY STOPPING ---
+            logger.info(f"\n[Epoch {epoch}] Train: {avg_train:.4f} | (No Val)\n")
+
+        # Checkpoint
         if epoch % save_every == 0:
             ckpt_path = os.path.join(cfg["train"]["checkpoint_dir"], f"epoch_{epoch:04d}.pth")
             trainer.save_checkpoint(ckpt_path, epoch)
-            logger.info(f"[*] Đã lưu checkpoint định kỳ: {ckpt_path}")
-            
-        # Truyền monitor_loss (chứa val_loss hoặc train_loss) vào Early Stop
+            logger.info(f"[*] Checkpoint: {ckpt_path}")
+
         if early_stop.step(monitor_loss, trainer.ema_model):
-            logger.info(f"\n[!] Kích hoạt Early Stopping tại Epoch {epoch}. Ngừng huấn luyện!")
+            logger.info(f"\n[!] Early Stopping tại Epoch {epoch}!")
             break
-            
-    # Đảm bảo luôn lưu model cuối cùng dù chạy hết vòng lặp hay bị ngắt
+
     final_path = os.path.join(cfg["train"]["checkpoint_dir"], "last_model.pth")
     trainer.save_checkpoint(final_path, epoch)
-    logger.info(f"[*] Đã lưu mô hình cuối cùng: {final_path}")
-    
-    logger.info("\n✅ Hoàn thành quá trình huấn luyện!")
+    logger.info(f"[*] Lưu model cuối: {final_path}")
+    logger.info("\n✅ Hoàn thành huấn luyện!")
 
 if __name__ == "__main__":
     main()
