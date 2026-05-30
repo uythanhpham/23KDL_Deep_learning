@@ -10,6 +10,7 @@ def gram_matrix(feat: torch.Tensor) -> torch.Tensor:
     Dùng để triệt tiêu thông tin không gian (spatial) và chỉ giữ lại 
     thông tin tương quan giữa các kênh (channels) -> đại diện cho Texture/Style.
     """
+    feat = feat.float()
     B, C, H, W = feat.shape
     # Reshape: (B, C, H, W) -> (B, C, H*W)
     feat_reshaped = feat.view(B, C, H * W)
@@ -88,6 +89,7 @@ class StyleEncoder(nn.Module):
         của UNet Diffusion sang miền chuẩn hóa của ImageNet để đưa vào VGG.
         """
         # Đưa từ [-1, 1] về [0, 1]
+        x = x.float()
         x01 = (x.clamp(-1.0, 1.0) + 1.0) / 2.0
         
         # ImageNet Mean và Std

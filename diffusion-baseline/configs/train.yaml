@@ -2,7 +2,7 @@ data:
   content_dir: debug_data/content # Thư mục chứa ảnh cấu trúc (ảnh gốc cần biến đổi)
   style_dir: debug_data/style     # Thư mục chứa ảnh phong cách (texture/màu sắc muốn học)
   image_size: 256
-  batch_size: 4
+  batch_size: 2
   num_workers: 4
   val_split: 0.1
 
@@ -10,7 +10,7 @@ train:
   epochs: 50
   lr: 0.0002
   grad_clip: 1.0
-  mixed_precision: false
+  mixed_precision: true
   ema_decay: 0.9999
   log_every: 10
   save_every: 5
