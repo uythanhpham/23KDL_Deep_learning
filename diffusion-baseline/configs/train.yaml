@@ -7,8 +7,8 @@ data:
   val_split: 0.1
 
 train:
-  epochs: 50
-  lr: 0.0002
+  epochs: 150
+  lr: 0.0001
   grad_clip: 1.0
   mixed_precision: true
   ema_decay: 0.9999
@@ -19,9 +19,9 @@ train:
 
 loss_weights:
   noise: 1.0      # Trọng số cho hàm loss chính của DDPM
-  style: 0.1      # Trọng số ép mô hình học phong cách 
-  content: 0.01   # Trọng số ép mô hình giữ lại cấu trúc ban đầu
+  style: 0.5      # Trọng số ép mô hình học phong cách (tăng mạnh vì gradient đã fix)
+  content: 0.1    # Trọng số ép mô hình giữ lại cấu trúc ban đầu (tăng mạnh vì gradient đã fix)
 
 early_stopping:
-  patience: 10
+  patience: 20
   min_delta: 0.0001

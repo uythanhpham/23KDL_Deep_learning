@@ -40,18 +40,14 @@ def load_json(filepath: str | Path) -> Dict:
         return json.load(f)
 
 # =====================================================================
-# GIẢI THÍCH: TẠI SAO PHẢI DÙNG 2 HỆ SỐ NORMALIZE KHÁC NHAU?
+# GIẢI THÍCH: TẠI SAO CẢ CONTENT VÀ STYLE ĐỀU DÙNG [-1, 1]?
 # =====================================================================
-# 1. Content Transform (Cho Diffusion UNet):
-#    - Diffusion Model chuẩn (như DDPM) được huấn luyện để thêm/khử nhiễu Gaussian N(0,1).
-#    - Để toán học hoạt động đúng, dữ liệu ảnh đầu vào cũng phải được scale về đoạn [-1, 1].
-#    - Normalize([0.5]*3, [0.5]*3) chuyển miền giá trị từ [0.0, 1.0] sang [-1.0, 1.0].
-#
-# 2. Style Transform (Cho VGG19 Encoder):
-#    - Để lấy được Style Embedding (Gram matrix), ta phải cho ảnh đi qua mạng VGG19.
-#    - Mạng VGG19 này đã được pre-train trên bộ dataset ImageNet.
-#    - Nó bắt buộc đầu vào phải được chuẩn hóa theo phân phối thống kê gốc của ImageNet 
-#      (mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) thì mới trích xuất feature chuẩn xác.
+# Cả Content lẫn Style đều được chuẩn hóa về miền [-1, 1].
+# Lý do: StyleEncoder._to_vgg_input() đã tự chuyển đổi từ [-1, 1] 
+# sang chuẩn ImageNet bên trong. Nếu DataLoader normalize theo ImageNet
+# trước, rồi _to_vgg_input() lại normalize thêm lần nữa → SAI.
+# Vì vậy, cả 2 transform đều dùng Normalize([0.5]*3, [0.5]*3) để 
+# đưa về [-1, 1], và StyleEncoder sẽ tự xử lý phần còn lại.
 # =====================================================================
 
 def get_content_transform(image_size: int) -> transforms.Compose:
@@ -65,12 +61,12 @@ def get_content_transform(image_size: int) -> transforms.Compose:
     ])
 
 def get_style_transform(image_size: int) -> transforms.Compose:
-    """Pipeline biến đổi cho ảnh Style (Đầu vào VGG19)."""
+    """Pipeline biến đổi cho ảnh Style — cũng chuẩn hóa về [-1, 1] như Content."""
     return transforms.Compose([
         transforms.Resize(image_size + 32, interpolation=transforms.InterpolationMode.BILINEAR),
         transforms.CenterCrop(image_size),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # ImageNet Stats
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) # [-1, 1] — StyleEncoder._to_vgg_input() sẽ tự chuyển sang ImageNet
     ])
 
 class StyleDiffusionDataset(Dataset):
@@ -194,12 +190,12 @@ def main():
         assert c_tensor.shape == (B, C, H, W), f"Lỗi shape content: {c_tensor.shape}"
         assert s_tensor.shape == (B, C, H, W), f"Lỗi shape style: {s_tensor.shape}"
         
-        # Kiểm tra range của Content (phải thuộc [-1.1, 1.1])
+        # Kiểm tra range — CẢ HAI đều phải thuộc [-1.1, 1.1]
         c_min, c_max = c_tensor.min().item(), c_tensor.max().item()
         assert c_min >= -1.1 and c_max <= 1.1, f"Lỗi range content: [{c_min:.2f}, {c_max:.2f}]"
         
-        # Lấy range của Style (thường lớn hơn do ImageNet stats)
         s_min, s_max = s_tensor.min().item(), s_tensor.max().item()
+        assert s_min >= -1.1 and s_max <= 1.1, f"Lỗi range style: [{s_min:.2f}, {s_max:.2f}]"
         
         print("\n--- THÔNG TIN BATCH ---")
         print(f"Content: shape={c_tensor.shape}, range=[{c_min:.4f}, {c_max:.4f}]")

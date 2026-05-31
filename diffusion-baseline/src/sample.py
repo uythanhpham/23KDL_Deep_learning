@@ -103,9 +103,13 @@ def load_model(checkpoint_path: str, model_cfg: dict, style_cfg: dict, device: s
     style_encoder.eval()
     return model, style_encoder
 
-def run_sampling(model, style_encoder, scheduler, content_t, style_t, sampler_type, ddim_steps, mode, device):
+def run_sampling(model, style_encoder, scheduler, content_t, style_t, sampler_type, ddim_steps, mode, device, strength=0.6):
     """
     Thực thi quá trình sinh ảnh dựa trên Mode yêu cầu.
+    
+    Args:
+        strength: Mức độ nhiễu thêm vào content (0.0 = giữ nguyên, 1.0 = nhiễu thuần).
+                  Giá trị thấp hơn giữ cấu trúc content tốt hơn.
     """
     B, C, H, W = content_t.shape if content_t is not None else style_t.shape
     
@@ -130,8 +134,9 @@ def run_sampling(model, style_encoder, scheduler, content_t, style_t, sampler_ty
         elif mode == "content_to_stylized":
             assert content_t is not None, "Chế độ content_to_stylized yêu cầu phải có ảnh content!"
             T = scheduler.num_timesteps
-            # Không thêm nhiễu 100%, chỉ thêm khoảng 80% để vẫn giữ lại mờ mờ cấu trúc gốc
-            t_max = int(T * 0.8)
+            # Dùng strength để điều chỉnh mức nhiễu — giá trị nhỏ hơn giữ content tốt hơn
+            t_max = int(T * strength)
+            t_max = max(1, min(t_max, T - 1))  # Đảm bảo trong khoảng hợp lệ
             
             x_t, _ = scheduler.add_noise(content_t.to(device), torch.tensor([t_max], device=device))
             
@@ -175,9 +180,11 @@ def main():
         raise FileNotFoundError(f"Không tìm thấy ảnh style nào tại: {s_cfg['style_path']}")
         
     num_samples = max(len(content_paths), len(style_paths))
+    image_size = s_cfg.get("image_size", 256)
+    strength = s_cfg.get("strength", 0.6)
     
     print("\n" + "="*50)
-    print(f"BẮT ĐẦU SINH ẢNH (Mode: {s_cfg['mode']} | Sampler: {s_cfg['sampler']})")
+    print(f"BẮT ĐẦU SINH ẢNH (Mode: {s_cfg['mode']} | Sampler: {s_cfg['sampler']} | Strength: {strength})")
     print("="*50 + "\n")
     
     # 4. Vòng lặp lấy mẫu (Inference Loop)
@@ -187,8 +194,8 @@ def main():
         s_path = style_paths[i % len(style_paths)]
         
         # Load Content và Style bằng hệ số chuẩn hóa của Diffusion [-1, 1]
-        c_tensor = load_image(c_path, s_cfg.get("image_size", 64), "diffusion") if c_path else None
-        s_tensor = load_image(s_path, s_cfg.get("image_size", 64), "diffusion")
+        c_tensor = load_image(c_path, image_size, "diffusion") if c_path else None
+        s_tensor = load_image(s_path, image_size, "diffusion")
         
         print(f"[{i+1}/{num_samples}] Content: {os.path.basename(c_path) if c_path else 'NOISE'} | Style: {os.path.basename(s_path)}")
         
@@ -202,7 +209,8 @@ def main():
             sampler_type=s_cfg["sampler"],
             ddim_steps=s_cfg["ddim_steps"],
             mode=s_cfg["mode"],
-            device=device
+            device=device,
+            strength=strength
         )
         
         # Lưu kết quả đầu ra độc lập

@@ -3,17 +3,19 @@ import torch.nn.functional as F
 
 """
 ========================================================================
-GIẢI THÍCH TRICK: t_mask (Lọc Timestep cho Perceptual Loss)
+GIẢI THÍCH: style_diffusion_loss — Hàm tính tổng Loss cho Style-guided DDPM
 ========================================================================
-Trong Diffusion, ở các bước timestep lớn (ví dụ t > 700), ảnh x_t gần 
-như là nhiễu thuần túy (pure noise). Lúc này, mạng UNet dự đoán x_0 
-(x0_pred) sẽ cực kỳ mờ và thiếu chính xác.
-Nếu ta ép mạng VGG19 (vốn được train trên ảnh nét rõ) phải trích xuất 
-Gram Matrix từ x0_pred quá mờ này, Loss sinh ra sẽ rất "ảo" và làm nhiễu 
-quá trình huấn luyện.
-=> TRICK: Ta chỉ kích hoạt Style Loss và Content Loss khi timestep t 
-nằm ở khoảng nhỏ (ví dụ t < T/4). Lúc này ảnh x_t chỉ bị nhiễu nhẹ, 
-x0_pred đủ sắc nét để VGG đánh giá phong cách và cấu trúc một cách chuẩn xác.
+Gồm 3 thành phần:
+  1. noise_loss  : MSE giữa nhiễu dự đoán và nhiễu thực (mục tiêu cốt lõi DDPM)
+  2. style_loss  : Gram-matrix loss ép x0_pred có phong cách giống style image
+  3. content_loss: Feature-matching loss ép x0_pred giữ cấu trúc nội dung
+
+QUAN TRỌNG: x0_pred phải GIỮA NGUYÊN gradient graph (KHÔNG dùng detach/no_grad)
+để gradient từ style_loss và content_loss chảy ngược về UNet qua predict_x0.
+Nếu cắt gradient → UNet chỉ học noise prediction thuần, bỏ qua style conditioning.
+
+t_mask: Chỉ tính perceptual loss ở các timestep nhỏ (t < T//2) vì ở đó 
+x0_pred đủ sạch để VGG trích xuất feature có ý nghĩa.
 ========================================================================
 """
 
@@ -29,7 +31,7 @@ def style_diffusion_loss(model, style_encoder, scheduler, batch: dict, weights: 
     Tính tổng các hàm Loss cho Style-guided Diffusion.
     Trả về Tensor tổng (để gọi .backward()) và từ điển (dict) chứa các giá trị loss để log.
     """
-    # Xóa ảnh vào thiết bị tính toán
+    # Đưa ảnh vào thiết bị tính toán
     x0 = batch["content"].to(device)
     style = batch["style"].to(device)
     
@@ -37,7 +39,7 @@ def style_diffusion_loss(model, style_encoder, scheduler, batch: dict, weights: 
     T = scheduler.num_timesteps
     
     # ---------------------------------------------------------
-    # 1. Trích xuất Style Embedding (Đóng băng VGG)
+    # 1. Trích xuất Style Embedding (Đóng băng VGG — đúng)
     # ---------------------------------------------------------
     with torch.no_grad():
         style_emb = style_encoder.encode_style(style)
@@ -57,13 +59,13 @@ def style_diffusion_loss(model, style_encoder, scheduler, batch: dict, weights: 
     loss_noise = noise_prediction_loss(eps_pred, eps_true)
     
     # ---------------------------------------------------------
-    # 5. Dự đoán lại ảnh gốc x_0 để chuẩn bị tính Perceptual Loss
+    # 5. Dự đoán lại ảnh gốc x_0 — KHÔNG DETACH, KHÔNG NO_GRAD
+    #    để gradient từ perceptual loss chảy ngược về UNet
     # ---------------------------------------------------------
-    with torch.no_grad():
-        # Dự đoán x0_pred nhưng tách khỏi đồ thị gradient (detach)
-        x0_pred = scheduler.predict_x0(x_t, t, eps_pred.detach())
-        # Tạo mask lọc các ảnh ở giai đoạn ít nhiễu
-        t_mask = (t < T // 4)
+    x0_pred = scheduler.predict_x0(x_t, t, eps_pred)
+    
+    # Tạo mask lọc các ảnh ở giai đoạn ít nhiễu (mở rộng sang T//2)
+    t_mask = (t < T // 2)
         
     # Khởi tạo loss phụ bằng 0.0 an toàn
     loss_style = torch.tensor(0.0, device=device)
@@ -78,7 +80,9 @@ def style_diffusion_loss(model, style_encoder, scheduler, batch: dict, weights: 
         true_style_in = style_encoder._to_vgg_input(style[t_mask])
         
         pf = style_encoder.vgg(pred_style_in)["style_feats"]
-        tf = style_encoder.vgg(true_style_in)["style_feats"]
+        # Target không cần gradient
+        with torch.no_grad():
+            tf = style_encoder.vgg(true_style_in)["style_feats"]
         loss_style = style_encoder.compute_style_loss(pf, tf)
         
     # ---------------------------------------------------------
@@ -87,7 +91,8 @@ def style_diffusion_loss(model, style_encoder, scheduler, batch: dict, weights: 
     if t_mask.any() and weights.get("content", 0.0) > 0:
         pc = style_encoder.encode_content(x0_pred[t_mask])
         # x0 gốc không cần tính gradient, dùng làm mỏ neo (target)
-        tc = style_encoder.encode_content(x0[t_mask].detach())
+        with torch.no_grad():
+            tc = style_encoder.encode_content(x0[t_mask])
         loss_content = style_encoder.compute_content_loss(pc, tc)
         
     # ---------------------------------------------------------
@@ -125,14 +130,14 @@ if __name__ == "__main__":
     device = "cpu"
     model = UNet(style_dim=512).to(device)
     enc = StyleEncoder(style_dim=512).to(device)
-    sched = DDPMScheduler(num_timesteps=1000, beta_schedule="linear").to(device)
+    sched = DDPMScheduler(num_timesteps=1000, beta_schedule="cosine").to(device)
     
     # 2. Tạo batch dữ liệu thô (miền [-1, 1])
     batch = {
         "content": torch.randn(4, 3, 64, 64),
         "style": torch.randn(4, 3, 64, 64)
     }
-    weights = {"noise": 1.0, "style": 0.1, "content": 0.01}
+    weights = {"noise": 1.0, "style": 0.5, "content": 0.1}
     
     # 3. Tính Loss
     total, info = style_diffusion_loss(model, enc, sched, batch, weights, device)
@@ -143,12 +148,20 @@ if __name__ == "__main__":
     # 5. Chạy lan truyền ngược (Backpropagation)
     total.backward()
     
-    # 6. Kiểm tra an toàn: Đảm bảo mạng VGG19 không bị rò rỉ gradient (phải đóng băng tuyệt đối)
+    # 6. Kiểm tra: UNet phải nhận gradient từ tất cả loss components
+    has_grad = False
+    for name, p in model.named_parameters():
+        if p.grad is not None and p.grad.abs().sum() > 0:
+            has_grad = True
+            break
+    assert has_grad, "FAIL: UNet không nhận được gradient!"
+    
+    # 7. Kiểm tra an toàn: Đảm bảo mạng VGG19 không bị rò rỉ gradient (phải đóng băng tuyệt đối)
     for name, p in enc.vgg.named_parameters():
         assert p.grad is None, f"FAIL: Leak gradient tại layer {name} của VGG!"
         
     print(f"✓ Output shape Scalar OK")
-    print(f"✓ Backpropagation thành công (không crash)")
+    print(f"✓ Backpropagation thành công — gradient chảy đến UNet")
     print(f"✓ VGG frozen (0 leak gradient) OK")
     print(f"✓ Info dict: {info}")
     print("=== SMOKE 4A: PASS ===")
