@@ -2,13 +2,13 @@ data:
   content_dir: debug_data/content # Thư mục chứa ảnh cấu trúc (ảnh gốc cần biến đổi)
   style_dir: debug_data/style     # Thư mục chứa ảnh phong cách (texture/màu sắc muốn học)
   image_size: 256
-  batch_size: 2
+  batch_size: 3
   num_workers: 4
   val_split: 0.1
 
 train:
-  epochs: 150
-  lr: 0.0001
+  epochs: 30
+  lr: 0.0002
   grad_clip: 1.0
   mixed_precision: true
   ema_decay: 0.9999
@@ -19,9 +19,9 @@ train:
 
 loss_weights:
   noise: 1.0      # Trọng số cho hàm loss chính của DDPM
-  style: 0.5      # Trọng số ép mô hình học phong cách (tăng mạnh vì gradient đã fix)
-  content: 0.1    # Trọng số ép mô hình giữ lại cấu trúc ban đầu (tăng mạnh vì gradient đã fix)
+  style: 0.5      # Trọng số ép mô hình học phong cách
+  content: 0.1    # Trọng số ép mô hình giữ lại cấu trúc ban đầu
 
 early_stopping:
-  patience: 20
+  patience: 15
   min_delta: 0.0001

@@ -5,6 +5,7 @@ import random
 import numpy as np
 import torch
 from torch.optim import Adam
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # Chống memory fragmentation — phải set TRƯỚC khi PyTorch allocate bất kỳ tensor nào
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
@@ -161,7 +162,12 @@ def main():
         mixed_precision = cfg["train"]["mixed_precision"],
     )
 
-    # 7. Early Stopping
+    # 7. LR Scheduler — Cosine Annealing để hội tụ nhanh trong thời gian giới hạn
+    epochs = cfg["train"]["epochs"]
+    lr_scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    logger.info(f"[*] LR Scheduler: CosineAnnealingLR (T_max={epochs}, eta_min=1e-6)")
+
+    # 8. Early Stopping
     best_model_path = os.path.join(cfg["train"]["checkpoint_dir"], "best_model.pth")
     early_stop = EarlyStopping(
         patience  = cfg["early_stopping"]["patience"],
@@ -169,16 +175,20 @@ def main():
         save_path = best_model_path,
     )
 
-    epochs     = cfg["train"]["epochs"]
     log_every  = cfg["train"]["log_every"]
     save_every = cfg["train"]["save_every"]
     tl_len     = len(train_loader)
+
+    # Ước lượng thời gian
+    est_time_per_epoch = tl_len * 0.5 / 60  # ~0.5s per step
+    est_total = est_time_per_epoch * epochs
+    logger.info(f"[*] Steps/epoch: {tl_len} | Ước lượng: ~{est_time_per_epoch:.1f} phút/epoch | ~{est_total:.1f} phút tổng")
 
     logger.info("\n" + "="*50)
     logger.info("BẮT ĐẦU VÒNG LẶP HUẤN LUYỆN")
     logger.info("="*50 + "\n")
 
-    # 8. Training loop
+    # 9. Training loop
     for epoch in range(1, epochs + 1):
 
         # ── TRAIN ──────────────────────────────────────────
@@ -190,13 +200,15 @@ def main():
             train_losses.append(r["train_loss"])
 
             if (step_i + 1) % log_every == 0:
+                current_lr = optimizer.param_groups[0]['lr']
                 logger.info(
                     f"[E{epoch}/{epochs}] S{step_i+1}/{tl_len} "
                     f"| Total:{r['train_loss']:.4f} "
                     f"| Noise:{r['noise_loss']:.4f} "
                     f"| Style:{r['style_loss']:.4f} "
                     f"| Content:{r['content_loss']:.4f} "
-                    f"| Grad:{r['grad_norm']:.3f}"
+                    f"| Grad:{r['grad_norm']:.3f} "
+                    f"| LR:{current_lr:.6f}"
                 )
 
         avg_train = sum(train_losses) / len(train_losses)
@@ -207,12 +219,15 @@ def main():
             val_losses = [trainer.val_step(b)["val_loss"] for b in val_loader]
             avg_val    = sum(val_losses) / len(val_losses)
             monitor    = avg_val
-            logger.info(f"\n[Epoch {epoch}] Train: {avg_train:.4f} | Val: {avg_val:.4f}\n")
+            logger.info(f"\n[Epoch {epoch}] Train: {avg_train:.4f} | Val: {avg_val:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f}\n")
         else:
             monitor = avg_train
-            logger.info(f"\n[Epoch {epoch}] Train: {avg_train:.4f} | (No Val)\n")
+            logger.info(f"\n[Epoch {epoch}] Train: {avg_train:.4f} | (No Val) | LR: {optimizer.param_groups[0]['lr']:.6f}\n")
 
         torch.cuda.empty_cache()   # ← giải phóng VRAM sau val
+
+        # ── LR SCHEDULER STEP ─────────────────────────────
+        lr_scheduler.step()
 
         # ── CHECKPOINT ─────────────────────────────────────
         if epoch % save_every == 0:
@@ -227,7 +242,7 @@ def main():
             logger.info(f"\n[!] Early Stopping tại Epoch {epoch}!")
             break
 
-    # 9. Lưu model cuối
+    # 10. Lưu model cuối
     final_path = os.path.join(cfg["train"]["checkpoint_dir"], "last_model.pth")
     trainer.save_checkpoint(final_path, epoch)
     logger.info(f"[*] Lưu model cuối: {final_path}")
