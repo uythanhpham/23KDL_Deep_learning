@@ -93,6 +93,50 @@ class DDIMSampler(nn.Module):
                 
         return x.clamp(-1.0, 1.0)
 
+    def sample_img2img(self, model: nn.Module, x0: torch.Tensor, style_emb: torch.Tensor, 
+                       device: str, strength: float = 0.6) -> torch.Tensor:
+        """
+        DDIM Img2Img: Thêm nhiễu vào ảnh gốc rồi khử nhiễu bằng DDIM (nhảy cóc).
+        Thay vì đi 600 bước DDPM tuần tự, DDIM chỉ cần 30-50 bước.
+        
+        Args:
+            x0: Ảnh content gốc, shape (B, C, H, W), miền [-1, 1]
+            strength: Mức độ nhiễu (0.0 = giữ nguyên, 1.0 = nhiễu thuần)
+        """
+        model.eval()
+        ts = self.timesteps.tolist()  # Danh sách timestep nhảy cóc [980, 960, ..., 0]
+        
+        # Tìm vị trí bắt đầu dựa trên strength
+        # strength=0.6 → bắt đầu từ 60% trong chuỗi DDIM steps
+        start_idx = max(0, int(len(ts) * (1.0 - strength)))
+        ts_sub = ts[start_idx:]  # Chỉ lấy phần timestep từ start_idx trở đi
+        
+        if len(ts_sub) == 0:
+            return x0.clamp(-1.0, 1.0)
+        
+        # Thêm nhiễu vào x0 tại timestep bắt đầu
+        t_start = ts_sub[0]
+        t_tensor = torch.full((x0.shape[0],), t_start, device=device, dtype=torch.long)
+        
+        ah_t = self.scheduler.alphas_cumprod[t_start].to(device)
+        noise = torch.randn_like(x0)
+        x = torch.sqrt(ah_t) * x0.to(device) + torch.sqrt(1.0 - ah_t) * noise
+        
+        with torch.no_grad():
+            for i, t_val in enumerate(tqdm(ts_sub, desc="DDIM Img2Img")):
+                t_batch = torch.full((x0.shape[0],), t_val, device=device, dtype=torch.long)
+                eps_pred = model(x, t_batch, style_emb)
+                
+                # Timestep tiếp theo trong chuỗi con
+                if (i + 1) < len(ts_sub):
+                    t_prev = ts_sub[i + 1]
+                else:
+                    t_prev = -1
+                
+                x = self.step(eps_pred, t_val, t_prev, x)
+        
+        return x.clamp(-1.0, 1.0)
+
 
 if __name__ == "__main__":
     # ==========================================

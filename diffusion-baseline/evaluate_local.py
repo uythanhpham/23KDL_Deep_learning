@@ -27,10 +27,10 @@ from tqdm import tqdm
 # =====================================================================
 # CẤU HÌNH — Chỉnh sửa đường dẫn ở đây
 # =====================================================================
-CHECKPOINT   = r"diffusion-baseline/checkpoints/best_model.pth"
-CONTENT_DIR  = r"data/archive/testA"
-STYLE_DIR    = r"data/archive/testB"
-OUTPUT_DIR   = r"diffusion-baseline/outputs/eval_local"
+CHECKPOINT   = os.path.join(os.path.dirname(__file__), "checkpoints", "best_model.pth")
+CONTENT_DIR  = os.path.join(os.path.dirname(__file__), "..", "data", "archive", "testA")
+STYLE_DIR    = os.path.join(os.path.dirname(__file__), "..", "data", "archive", "testB")
+OUTPUT_DIR   = r"outputs\eval_local"
 NUM_SAMPLES  = 15
 SEED         = 42
 
@@ -155,15 +155,9 @@ def generate_images(model, style_encoder, device):
             B, C, H, W = c_tensor.shape
 
             if MODE == "content_to_stylized":
-                T = scheduler.num_timesteps
-                t_max = max(1, min(int(T * STRENGTH), T - 1))
-                x_t, _ = scheduler.add_noise(c_tensor.to(device), torch.tensor([t_max], device=device))
-
-                for t_val in tqdm(reversed(range(t_max)), desc=f"  Denoising {i+1}", total=t_max, leave=False):
-                    t_batch = torch.full((1,), t_val, device=device, dtype=torch.long)
-                    eps = model(x_t, t_batch, style_emb)
-                    x_t = scheduler.step(eps, t_val, x_t)
-                output = x_t.cpu()
+                # Sử dụng DDIM img2img thay vì DDPM step-by-step (nhanh gấp ~12x)
+                sampler = DDIMSampler(scheduler, ddim_steps=DDIM_STEPS)
+                output = sampler.sample_img2img(model, c_tensor, style_emb, device, strength=STRENGTH).cpu()
 
             else:  # noise_to_stylized
                 if SAMPLER == "ddim":

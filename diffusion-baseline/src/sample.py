@@ -133,20 +133,10 @@ def run_sampling(model, style_encoder, scheduler, content_t, style_t, sampler_ty
         # -------------------------------------------------------------
         elif mode == "content_to_stylized":
             assert content_t is not None, "Chế độ content_to_stylized yêu cầu phải có ảnh content!"
-            T = scheduler.num_timesteps
-            # Dùng strength để điều chỉnh mức nhiễu — giá trị nhỏ hơn giữ content tốt hơn
-            t_max = int(T * strength)
-            t_max = max(1, min(t_max, T - 1))  # Đảm bảo trong khoảng hợp lệ
-            
-            x_t, _ = scheduler.add_noise(content_t.to(device), torch.tensor([t_max], device=device))
-            
-            # Quá trình lấy mẫu ngược bắt đầu từ t_max thay vì T-1
-            for t_val in tqdm(reversed(range(t_max)), desc="Denoising (Img2Img)", total=t_max):
-                t_batch = torch.full((1,), t_val, device=device, dtype=torch.long)
-                eps = model(x_t, t_batch, style_emb)
-                x_t = scheduler.step(eps, t_val, x_t)
-                
-            return x_t.cpu()
+            # Sử dụng DDIM img2img thay vì DDPM step-by-step (nhanh gấp ~12x)
+            sampler = DDIMSampler(scheduler, ddim_steps=ddim_steps)
+            output = sampler.sample_img2img(model, content_t, style_emb, device, strength=strength)
+            return output.cpu()
 
 # =====================================================================
 # HÀM CHÍNH (MAIN PROCESS)

@@ -111,6 +111,7 @@ def main():
     parser = argparse.ArgumentParser(description="Huấn luyện Style-guided Diffusion")
     parser.add_argument("--train_config", type=str, default="configs/train.yaml")
     parser.add_argument("--model_config",  type=str, default="configs/model.yaml")
+    parser.add_argument("--resume", type=str, default=None, help="Đường dẫn checkpoint để resume training")
     args = parser.parse_args()
 
     # 1. Load config trước tiên
@@ -162,9 +163,19 @@ def main():
         mixed_precision = cfg["train"]["mixed_precision"],
     )
 
+    # 6b. Resume từ checkpoint (nếu có)
+    start_epoch = 1
+    if args.resume:
+        logger.info(f"[*] Đang resume từ: {args.resume}")
+        start_epoch = trainer.load_checkpoint(args.resume) + 1
+        logger.info(f"[*] Resume thành công! Bắt đầu từ epoch {start_epoch}")
+
     # 7. LR Scheduler — Cosine Annealing để hội tụ nhanh trong thời gian giới hạn
     epochs = cfg["train"]["epochs"]
     lr_scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    # Nếu resume, fast-forward LR scheduler
+    for _ in range(start_epoch - 1):
+        lr_scheduler.step()
     logger.info(f"[*] LR Scheduler: CosineAnnealingLR (T_max={epochs}, eta_min=1e-6)")
 
     # 8. Early Stopping
@@ -189,7 +200,7 @@ def main():
     logger.info("="*50 + "\n")
 
     # 9. Training loop
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
 
         # ── TRAIN ──────────────────────────────────────────
         train_losses = []
