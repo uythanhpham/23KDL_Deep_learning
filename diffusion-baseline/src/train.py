@@ -167,7 +167,25 @@ def main():
     start_epoch = 1
     if args.resume:
         logger.info(f"[*] Đang resume từ: {args.resume}")
-        start_epoch = trainer.load_checkpoint(args.resume) + 1
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        
+        if isinstance(ckpt, dict) and "model" in ckpt:
+            # Format đầy đủ: {epoch, model, ema_model, optimizer, loss_weights}
+            start_epoch = trainer.load_checkpoint(args.resume) + 1
+            logger.info(f"[*] ✓ Resume ĐẦY ĐỦ (epoch + optimizer + EMA)")
+        else:
+            # Format raw state_dict (ví dụ: best_model.pth từ EarlyStopping)
+            state_dict = ckpt if isinstance(ckpt, dict) else ckpt
+            trainer.model.load_state_dict(state_dict)
+            trainer.ema_model.load_state_dict(state_dict)
+            # Optimizer giữ nguyên mới khởi tạo (không có state cũ để load)
+            start_epoch = cfg["train"].get("resume_epoch", 1)
+            logger.info(f"[*] ⚠️ Resume từ RAW state_dict (chỉ có weights)")
+            logger.info(f"[*]   → Optimizer được reset, EMA copy từ model")
+            logger.info(f"[*]   → Bắt đầu từ epoch {start_epoch}")
+        
+        del ckpt
+        torch.cuda.empty_cache()
         logger.info(f"[*] Resume thành công! Bắt đầu từ epoch {start_epoch}")
 
     # 7. LR Scheduler — Cosine Annealing để hội tụ nhanh trong thời gian giới hạn
