@@ -115,6 +115,12 @@ def load_model(device):
         model.load_state_dict(ckpt)
         print("✓ Loaded raw state_dict")
 
+    if "style_encoder" in ckpt:
+        style_encoder.load_state_dict(ckpt["style_encoder"])
+        print("✓ Loaded Style Encoder")
+    else:
+        print("⚠️ CẢNH BÁO: Không tìm thấy Style Encoder trong checkpoint! Mạng sẽ dùng trọng số random.")
+
     model.eval()
     style_encoder.eval()
 

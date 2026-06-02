@@ -58,7 +58,7 @@ class DDIMSampler(nn.Module):
         
         # 3. Tính toán hướng trỏ về x_t (Direction pointing to x_t)
         # $d_t = \sqrt{1 - \bar{\alpha}_{t-1} - \sigma^2} \epsilon_\theta$
-        dir_xt = torch.sqrt(1.0 - ah_prev - sigma**2) * eps_pred
+        dir_xt = torch.sqrt(torch.clamp(1.0 - ah_prev - sigma**2, min=0.0)) * eps_pred
         
         # 4. Thêm nhiễu (nếu eta > 0)
         noise = sigma * torch.randn_like(x_t) if self.eta > 0.0 else 0.0
@@ -119,7 +119,7 @@ class DDIMSampler(nn.Module):
         t_tensor = torch.full((x0.shape[0],), t_start, device=device, dtype=torch.long)
         
         ah_t = self.scheduler.alphas_cumprod[t_start].to(device)
-        noise = torch.randn_like(x0)
+        noise = torch.randn_like(x0).to(device)
         x = torch.sqrt(ah_t) * x0.to(device) + torch.sqrt(1.0 - ah_t) * noise
         
         with torch.no_grad():

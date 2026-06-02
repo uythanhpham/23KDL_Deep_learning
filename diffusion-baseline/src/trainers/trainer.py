@@ -93,6 +93,7 @@ class DiffusionTrainer:
             "epoch":        epoch,
             "model":        self.model.state_dict(),
             "ema_model":    self.ema_model.state_dict(),
+            "style_encoder": self.style_encoder.state_dict(),
             "optimizer":    self.optimizer.state_dict(),
             "loss_weights": self.loss_weights,
         }, path)
@@ -101,6 +102,8 @@ class DiffusionTrainer:
         ckpt = torch.load(path, map_location=self.device)
         self.model.load_state_dict(ckpt["model"])
         self.ema_model.load_state_dict(ckpt["ema_model"])
+        if "style_encoder" in ckpt:
+            self.style_encoder.load_state_dict(ckpt["style_encoder"])
         self.optimizer.load_state_dict(ckpt["optimizer"])
         if "loss_weights" in ckpt:
             self.loss_weights = ckpt["loss_weights"]

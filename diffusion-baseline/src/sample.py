@@ -99,6 +99,12 @@ def load_model(checkpoint_path: str, model_cfg: dict, style_cfg: dict, device: s
     else:
         model.load_state_dict(ckpt)
         
+    if "style_encoder" in ckpt:
+        style_encoder.load_state_dict(ckpt["style_encoder"])
+        print("✓ Đã load trọng số Style Encoder.")
+    else:
+        print("⚠️ CẢNH BÁO: Không tìm thấy trọng số Style Encoder trong checkpoint! Mạng sẽ dùng trọng số random (có thể gây nhiễu nặng).")
+        
     model.eval()
     style_encoder.eval()
     return model, style_encoder
@@ -133,9 +139,21 @@ def run_sampling(model, style_encoder, scheduler, content_t, style_t, sampler_ty
         # -------------------------------------------------------------
         elif mode == "content_to_stylized":
             assert content_t is not None, "Chế độ content_to_stylized yêu cầu phải có ảnh content!"
-            # Sử dụng DDIM img2img thay vì DDPM step-by-step (nhanh gấp ~12x)
-            sampler = DDIMSampler(scheduler, ddim_steps=ddim_steps)
-            output = sampler.sample_img2img(model, content_t, style_emb, device, strength=strength)
+            if sampler_type == "ddim":
+                sampler = DDIMSampler(scheduler, ddim_steps=ddim_steps)
+                output = sampler.sample_img2img(model, content_t, style_emb, device, strength=strength)
+            else:
+                # Dùng DDPM truyền thống (chậm nhưng an toàn hơn cho model chưa chín)
+                T = scheduler.num_timesteps
+                t_max = max(1, min(int(T * strength), T - 1))
+                x_t, _ = scheduler.add_noise(content_t.to(device), torch.tensor([t_max], device=device))
+                
+                for t_val in tqdm(reversed(range(t_max)), desc="DDPM Img2Img"):
+                    t_batch = torch.full((1,), t_val, device=device, dtype=torch.long)
+                    eps = model(x_t, t_batch, style_emb)
+                    x_t = scheduler.step(eps, t_val, x_t)
+                output = x_t
+                
             return output.cpu()
 
 # =====================================================================
