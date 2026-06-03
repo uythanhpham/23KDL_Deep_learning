@@ -143,9 +143,12 @@ def main():
     # 5. Models
     model         = UNet(**cfg["model"]).to(device)
     style_encoder = StyleEncoder(**cfg["style_encoder"]).to(device)
-    style_encoder.eval()
+    # style_encoder.eval() ← BỎ: cho phép MLP train cùng UNet (VGG vẫn frozen bên trong)
     scheduler     = DDPMScheduler(**cfg["diffusion"], device=device)
-    optimizer     = Adam(model.parameters(), lr=float(cfg["train"]["lr"]))
+    optimizer     = Adam(
+        list(model.parameters()) + list(style_encoder.parameters()),
+        lr=float(cfg["train"]["lr"])
+    )
 
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     logger.info(f"[*] UNet params: {n_params:.2f}M")

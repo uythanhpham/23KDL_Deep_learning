@@ -26,9 +26,8 @@ class DiffusionTrainer:
         else:
             self.loss_weights = loss_weights
 
-        self.style_encoder.eval()
-        for p in self.style_encoder.parameters():
-            p.requires_grad = False
+        # Style Encoder được train cùng UNet để học cách trích xuất style có ý nghĩa
+        # (VGG backbone vẫn frozen bên trong StyleEncoder, chỉ MLP được train)
 
         self.ema_model = copy.deepcopy(model)
         self.ema_model.eval()
