@@ -4,6 +4,7 @@ import yaml
 import random
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
@@ -59,10 +60,10 @@ class EarlyStopping:
         self.best_loss  = None
         self.early_stop = False
 
-    def step(self, val_loss: float, model: torch.nn.Module) -> bool:
+    def step(self, val_loss: float, trainer, epoch: int) -> bool:
         if self.best_loss is None:
             self.best_loss = val_loss
-            self._save(val_loss, model)
+            self._save(trainer, epoch)
         elif val_loss > self.best_loss - self.min_delta:
             self.counter += 1
             if self.verbose:
@@ -73,13 +74,14 @@ class EarlyStopping:
             if self.verbose:
                 logger.info(f"[EarlyStopping] Loss giảm {self.best_loss:.4f} → {val_loss:.4f}. Lưu model...")
             self.best_loss = val_loss
-            self._save(val_loss, model)
+            self._save(trainer, epoch)
             self.counter = 0
         return self.early_stop
 
-    def _save(self, val_loss: float, model: torch.nn.Module):
+    def _save(self, trainer, epoch: int):
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
-        torch.save(model.state_dict(), self.save_path)
+        # Sử dụng hàm lưu đầy đủ của trainer thay vì chỉ lưu model gốc
+        trainer.save_checkpoint(self.save_path, epoch)
 
 
 # =====================================================================
@@ -145,13 +147,26 @@ def main():
     style_encoder = StyleEncoder(**cfg["style_encoder"]).to(device)
     # style_encoder.eval() ← BỎ: cho phép MLP train cùng UNet (VGG vẫn frozen bên trong)
     scheduler     = DDPMScheduler(**cfg["diffusion"], device=device)
+
+    n_params = sum(p.numel() for p in model.parameters()) / 1e6
+    logger.info(f"[*] UNet params: {n_params:.2f}M")
+
+    # 5b. Multi-GPU: bọc UNet bằng DataParallel để dùng cả 2 GPU (vd Kaggle 2× T4).
+    # UNet chỉ dùng InstanceNorm/GroupNorm (chuẩn hóa theo từng ảnh) nên chia batch
+    # sang nhiều GPU cho output y hệt single-GPU — không cần SyncBatchNorm, không ảnh hưởng chất lượng.
+    # style_encoder KHÔNG wrap: VGG + MLP chạy trên cuda:0.
+    n_gpus = torch.cuda.device_count()
+    if n_gpus > 1:
+        model = nn.DataParallel(model)
+        logger.info(f"[*] DataParallel BẬT — dùng {n_gpus} GPU")
+    else:
+        logger.info(f"[*] DataParallel TẮT (device_count={n_gpus})")
+
+    # Optimizer tạo SAU khi wrap; model.parameters() trỏ tới cùng tensor của module gốc
     optimizer     = Adam(
         list(model.parameters()) + list(style_encoder.parameters()),
         lr=float(cfg["train"]["lr"])
     )
-
-    n_params = sum(p.numel() for p in model.parameters()) / 1e6
-    logger.info(f"[*] UNet params: {n_params:.2f}M")
 
     # 6. Trainer
     trainer = DiffusionTrainer(
@@ -179,7 +194,9 @@ def main():
         else:
             # Format raw state_dict (ví dụ: best_model.pth từ EarlyStopping)
             state_dict = ckpt if isinstance(ckpt, dict) else ckpt
-            trainer.model.load_state_dict(state_dict)
+            # Gỡ DataParallel nếu có để load đúng (state_dict lưu là UNet gốc, không prefix "module.")
+            base_model = model.module if isinstance(model, nn.DataParallel) else model
+            base_model.load_state_dict(state_dict)
             trainer.ema_model.load_state_dict(state_dict)
             # Optimizer giữ nguyên mới khởi tạo (không có state cũ để load)
             start_epoch = cfg["train"].get("resume_epoch", 1)
@@ -237,8 +254,8 @@ def main():
                     f"[E{epoch}/{epochs}] S{step_i+1}/{tl_len} "
                     f"| Total:{r['train_loss']:.4f} "
                     f"| Noise:{r['noise_loss']:.4f} "
-                    f"| Style:{r['style_loss']:.4f} "
-                    f"| Content:{r['content_loss']:.4f} "
+                    f"| Style:{r['style_loss']:.4f}(w={r['style_w']:.4f}) "
+                    f"| Content:{r['content_loss']:.4f}(w={r['content_w']:.4f}) "
                     f"| Grad:{r['grad_norm']:.3f} "
                     f"| LR:{current_lr:.6f}"
                 )
@@ -270,7 +287,7 @@ def main():
             logger.info(f"[*] Checkpoint: {ckpt_path}")
 
         # ── EARLY STOPPING ─────────────────────────────────
-        if early_stop.step(monitor, trainer.ema_model):
+        if early_stop.step(monitor, trainer, epoch):
             logger.info(f"\n[!] Early Stopping tại Epoch {epoch}!")
             break
 

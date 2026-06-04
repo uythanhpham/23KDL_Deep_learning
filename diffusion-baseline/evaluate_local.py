@@ -5,13 +5,12 @@ LOCAL EVALUATE — Chạy trên máy local (CPU/GPU)
 Đặt file này trong thư mục diffusion-baseline/ rồi chạy:
     python evaluate_local.py
 
-Yêu cầu: pip install lpips scikit-image pytorch-fid
+Yêu cầu: pip install lpips scikit-image
 ==========================================================
 """
 
 import os
 import sys
-import shutil
 import json
 import time
 import random
@@ -27,10 +26,10 @@ from tqdm import tqdm
 # =====================================================================
 # CẤU HÌNH — Chỉnh sửa đường dẫn ở đây
 # =====================================================================
-CHECKPOINT   = os.path.join(os.path.dirname(__file__), "checkpoints", "best_model.pth")
+CHECKPOINT   = os.path.join(os.path.dirname(__file__), "checkpoint", "epoch_0020.pth")
 CONTENT_DIR  = os.path.join(os.path.dirname(__file__), "..", "data", "archive", "testA")
 STYLE_DIR    = os.path.join(os.path.dirname(__file__), "..", "data", "archive", "testB")
-OUTPUT_DIR   = r"outputs\eval_local"
+OUTPUT_DIR   = os.path.join("outputs", "eval_local")
 NUM_SAMPLES  = 15
 SEED         = 42
 
@@ -103,23 +102,33 @@ def load_model(device):
     style_encoder = StyleEncoder(**model_cfg["style_encoder"]).to(device)
 
     print(f"Đang load checkpoint: {CHECKPOINT}")
-    ckpt = torch.load(CHECKPOINT, map_location=device, weights_only=True)
+    ckpt = torch.load(CHECKPOINT, map_location=device, weights_only=False)
 
-    if "ema_model" in ckpt:
-        model.load_state_dict(ckpt["ema_model"])
-        print("✓ Loaded EMA model")
-    elif "model" in ckpt:
-        model.load_state_dict(ckpt["model"])
-        print("✓ Loaded model")
+    if isinstance(ckpt, dict):
+        # Format đầy đủ từ trainer.save_checkpoint()
+        if "ema_model" in ckpt:
+            model.load_state_dict(ckpt["ema_model"])
+            print("✓ Loaded EMA model (Chất lượng cao)")
+        elif "model" in ckpt:
+            model.load_state_dict(ckpt["model"])
+            print("✓ Loaded model")
+        else:
+            # Raw state_dict
+            model.load_state_dict(ckpt)
+            print("✓ Loaded raw state_dict")
+
+        if "style_encoder" in ckpt:
+            style_encoder.load_state_dict(ckpt["style_encoder"])
+            print("✓ Loaded Style Encoder")
+        else:
+            print("⚠️ CẢNH BÁO: Không tìm thấy Style Encoder trong checkpoint!")
+
+        if "epoch" in ckpt:
+            print(f"✓ Checkpoint từ Epoch: {ckpt['epoch']}")
     else:
         model.load_state_dict(ckpt)
         print("✓ Loaded raw state_dict")
-
-    if "style_encoder" in ckpt:
-        style_encoder.load_state_dict(ckpt["style_encoder"])
-        print("✓ Loaded Style Encoder")
-    else:
-        print("⚠️ CẢNH BÁO: Không tìm thấy Style Encoder trong checkpoint! Mạng sẽ dùng trọng số random.")
+        print("⚠️ CẢNH BÁO: Không tìm thấy Style Encoder trong checkpoint!")
 
     model.eval()
     style_encoder.eval()
@@ -161,10 +170,8 @@ def generate_images(model, style_encoder, device):
             B, C, H, W = c_tensor.shape
 
             if MODE == "content_to_stylized":
-                # Sử dụng DDIM img2img thay vì DDPM step-by-step (nhanh gấp ~12x)
                 sampler = DDIMSampler(scheduler, ddim_steps=DDIM_STEPS)
                 output = sampler.sample_img2img(model, c_tensor, style_emb, device, strength=STRENGTH).cpu()
-
             else:  # noise_to_stylized
                 if SAMPLER == "ddim":
                     sampler = DDIMSampler(scheduler, ddim_steps=DDIM_STEPS)

@@ -1,10 +1,17 @@
 import copy
 import torch
+import torch.nn as nn
 import torch.nn.functional as F                          # ← thêm import F
 from torch.nn.utils import clip_grad_norm_
 from torch.cuda.amp import GradScaler, autocast
 from src.losses.diffusion_loss import style_diffusion_loss
 from torch.amp import GradScaler, autocast
+
+
+def unwrap(m):
+    """Trả về module gốc, gỡ lớp DataParallel/DDP nếu có."""
+    return m.module if isinstance(m, (nn.DataParallel, nn.parallel.DistributedDataParallel)) else m
+
 
 class DiffusionTrainer:
     def __init__(self, model, style_encoder, scheduler, optimizer,
@@ -29,14 +36,15 @@ class DiffusionTrainer:
         # Style Encoder được train cùng UNet để học cách trích xuất style có ý nghĩa
         # (VGG backbone vẫn frozen bên trong StyleEncoder, chỉ MLP được train)
 
-        self.ema_model = copy.deepcopy(model)
+        # EMA giữ bản UNet gốc (không bọc DataParallel) để lưu/eval gọn gàng
+        self.ema_model = copy.deepcopy(unwrap(model))
         self.ema_model.eval()
         for p in self.ema_model.parameters():
             p.requires_grad = False
 
     def _update_ema(self):
         with torch.no_grad():
-            for ema_p, model_p in zip(self.ema_model.parameters(), self.model.parameters()):
+            for ema_p, model_p in zip(self.ema_model.parameters(), unwrap(self.model).parameters()):
                 if model_p.requires_grad:
                     ema_p.data.mul_(self.ema_decay).add_(model_p.data, alpha=1.0 - self.ema_decay)
 
@@ -68,6 +76,8 @@ class DiffusionTrainer:
             "noise_loss":   info["noise_loss"],
             "style_loss":   info["style_loss"],
             "content_loss": info["content_loss"],
+            "style_w":      info["style_w"],      # đóng góp style đã nhân weight
+            "content_w":    info["content_w"],
             "grad_norm":    grad_norm,
         }
 
@@ -88,9 +98,11 @@ class DiffusionTrainer:
                 "style_loss": 0.0, "content_loss": 0.0}
 
     def save_checkpoint(self, path: str, epoch: int):
+        # Lưu state_dict của UNet gốc (gỡ DataParallel) để evaluate_local.py / sample.py
+        # vốn dựng UNet thường có thể load thẳng, không cần xử lý prefix "module."
         torch.save({
             "epoch":        epoch,
-            "model":        self.model.state_dict(),
+            "model":        unwrap(self.model).state_dict(),
             "ema_model":    self.ema_model.state_dict(),
             "style_encoder": self.style_encoder.state_dict(),
             "optimizer":    self.optimizer.state_dict(),
@@ -99,7 +111,7 @@ class DiffusionTrainer:
 
     def load_checkpoint(self, path: str) -> int:
         ckpt = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(ckpt["model"])
+        unwrap(self.model).load_state_dict(ckpt["model"])
         self.ema_model.load_state_dict(ckpt["ema_model"])
         if "style_encoder" in ckpt:
             self.style_encoder.load_state_dict(ckpt["style_encoder"])
