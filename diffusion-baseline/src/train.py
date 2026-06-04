@@ -170,12 +170,18 @@ def main():
         amp_enabled=cfg["train"]["mixed_precision"],
     ).to(device)
 
+    # MẶC ĐỊNH chạy SINGLE-GPU (ổn định — đúng setup đã train tốt 22 epoch).
+    # DataParallel chỉ bật khi đặt env USE_DATA_PARALLEL=1, vì combo
+    # DataParallel × AMP × cuDNN9 × T4 trên PyTorch 2.x gây 'illegal memory access'
+    # ngay backward step đầu (đã gặp 2 lần). Để dành cho việc chẩn đoán sau này.
     n_gpus = torch.cuda.device_count()
-    if n_gpus > 1:
+    use_dp = os.environ.get("USE_DATA_PARALLEL", "0") == "1" and n_gpus > 1
+    if use_dp:
         loss_module = nn.DataParallel(loss_module)
-        logger.info(f"[*] DataParallel BẬT (bọc StyleDiffusionLoss) — dùng {n_gpus} GPU")
+        logger.info(f"[*] DataParallel BẬT (USE_DATA_PARALLEL=1) — dùng {n_gpus} GPU")
     else:
-        logger.info(f"[*] DataParallel TẮT (device_count={n_gpus})")
+        logger.info(f"[*] DataParallel TẮT — chạy single-GPU (device_count={n_gpus}). "
+                    f"Đặt USE_DATA_PARALLEL=1 để thử đa GPU.")
 
     # 6. Trainer
     trainer = DiffusionTrainer(
