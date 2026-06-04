@@ -16,6 +16,7 @@ from src.models.unet          import UNet
 from src.models.style_encoder import StyleEncoder
 from src.diffusion.scheduler  import DDPMScheduler
 from src.trainers.trainer     import DiffusionTrainer
+from src.losses.diffusion_loss import StyleDiffusionLoss
 
 import logging
 
@@ -151,22 +152,30 @@ def main():
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     logger.info(f"[*] UNet params: {n_params:.2f}M")
 
-    # 5b. Multi-GPU: bọc UNet bằng DataParallel để dùng cả 2 GPU (vd Kaggle 2× T4).
-    # UNet chỉ dùng InstanceNorm/GroupNorm (chuẩn hóa theo từng ảnh) nên chia batch
-    # sang nhiều GPU cho output y hệt single-GPU — không cần SyncBatchNorm, không ảnh hưởng chất lượng.
-    # style_encoder KHÔNG wrap: VGG + MLP chạy trên cuda:0.
-    n_gpus = torch.cuda.device_count()
-    if n_gpus > 1:
-        model = nn.DataParallel(model)
-        logger.info(f"[*] DataParallel BẬT — dùng {n_gpus} GPU")
-    else:
-        logger.info(f"[*] DataParallel TẮT (device_count={n_gpus})")
-
-    # Optimizer tạo SAU khi wrap; model.parameters() trỏ tới cùng tensor của module gốc
+    # Optimizer trên CÁC THAM SỐ GỐC (UNet + MLP của StyleEncoder).
     optimizer     = Adam(
         list(model.parameters()) + list(style_encoder.parameters()),
         lr=float(cfg["train"]["lr"])
     )
+
+    # 5b. Multi-GPU: bọc TOÀN BỘ module tính loss (encode_style → UNet → predict_x0
+    # → perceptual) bằng DataParallel, KHÔNG bọc riêng UNet.
+    # Lý do: style_emb có gradient; nếu chỉ wrap UNet mà style_emb tính ở ngoài thì
+    # DataParallel phải scatter tensor-có-gradient xuyên GPU → 'illegal memory access'.
+    # Gói trọn vào 1 module thì mỗi GPU tự tính hết trên dữ liệu của mình.
+    # (UNet chỉ dùng InstanceNorm/GroupNorm — chuẩn hóa theo từng ảnh — nên chia batch
+    #  sang nhiều GPU cho kết quả y hệt single-GPU, không cần SyncBatchNorm.)
+    loss_module = StyleDiffusionLoss(
+        model, style_encoder, scheduler,
+        amp_enabled=cfg["train"]["mixed_precision"],
+    ).to(device)
+
+    n_gpus = torch.cuda.device_count()
+    if n_gpus > 1:
+        loss_module = nn.DataParallel(loss_module)
+        logger.info(f"[*] DataParallel BẬT (bọc StyleDiffusionLoss) — dùng {n_gpus} GPU")
+    else:
+        logger.info(f"[*] DataParallel TẮT (device_count={n_gpus})")
 
     # 6. Trainer
     trainer = DiffusionTrainer(
@@ -179,6 +188,7 @@ def main():
         ema_decay       = cfg["train"]["ema_decay"],
         loss_weights    = cfg["loss_weights"],
         mixed_precision = cfg["train"]["mixed_precision"],
+        loss_module     = loss_module,
     )
 
     # 6b. Resume từ checkpoint (nếu có)
