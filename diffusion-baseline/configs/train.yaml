@@ -2,7 +2,7 @@ data:
   content_dir: debug_data/content # Thư mục chứa ảnh cấu trúc (ảnh gốc cần biến đổi)
   style_dir: debug_data/style     # Thư mục chứa ảnh phong cách (texture/màu sắc muốn học)
   image_size: 256
-  batch_size: 4          # bội số của 2 để chia đều 2 GPU T4 (DataParallel)
+  batch_size: 2         # bội số của 2 để chia đều 2 GPU T4 (DataParallel)
   num_workers: 4
   val_split: 0.1
 
