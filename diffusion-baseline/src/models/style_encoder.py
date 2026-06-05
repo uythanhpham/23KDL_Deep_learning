@@ -84,6 +84,12 @@ class StyleEncoder(nn.Module):
             nn.Linear(1024, style_dim)
         )
 
+        # Vector "KHÔNG style" (null) cho Classifier-Free Guidance.
+        # Lúc train: thỉnh thoảng thay style_emb bằng vector này (style dropout) để model
+        # học cả nhánh có-style lẫn null. Lúc sinh: dùng làm nhánh unconditional.
+        # Là nn.Parameter nên được train cùng MLP và lưu trong checkpoint.
+        self.null_style = nn.Parameter(torch.zeros(style_dim))
+
     def _to_vgg_input(self, x: torch.Tensor) -> torch.Tensor:
         """
         [QUAN TRỌNG] Dùng ở nhiều chỗ để chuyển đổi Tensor từ miền [-1, 1] 

@@ -133,8 +133,18 @@ class DiffusionTrainer:
         unwrap(self.model).load_state_dict(ckpt["model"])
         self.ema_model.load_state_dict(ckpt["ema_model"])
         if "style_encoder" in ckpt:
-            self.style_encoder.load_state_dict(ckpt["style_encoder"])
-        self.optimizer.load_state_dict(ckpt["optimizer"])
+            # strict=False: checkpoint cũ (trước khi thêm CFG) chưa có 'null_style' →
+            # tham số null_style giữ giá trị khởi tạo (zeros) và sẽ học khi train tiếp.
+            missing, unexpected = self.style_encoder.load_state_dict(ckpt["style_encoder"], strict=False)
+            if missing:
+                print(f"[load_checkpoint] style_encoder thiếu key (giữ init): {list(missing)}")
+        # Optimizer: bọc try/except vì khi BẬT CFG, optimizer có thêm param 'null_style'
+        # → số param lệch với optimizer state cũ → load_state_dict báo lỗi. Khi đó bỏ qua
+        # (dùng optimizer mới khởi tạo; momentum Adam tự ấm lại sau vài chục step).
+        try:
+            self.optimizer.load_state_dict(ckpt["optimizer"])
+        except (ValueError, KeyError) as e:
+            print(f"[load_checkpoint] BỎ QUA optimizer state (lệch param, vd thêm null_style): {e}")
         # KHÔNG ghi đè loss_weights bằng giá trị trong checkpoint: khi resume để đổi
         # cấu hình loss (vd style 0.5 → 500), ta muốn dùng loss_weights MỚI từ config.
         # Giữ self.loss_weights (đã set lúc khởi tạo trainer) làm nguồn chân lý.

@@ -168,7 +168,9 @@ def main():
     loss_module = StyleDiffusionLoss(
         model, style_encoder, scheduler,
         amp_enabled=cfg["train"]["mixed_precision"],
+        style_dropout=float(cfg["train"].get("style_dropout", 0.0)),   # >0 để bật CFG (phương án B)
     ).to(device)
+    logger.info(f"[*] style_dropout = {cfg['train'].get('style_dropout', 0.0)} (CFG {'BẬT' if float(cfg['train'].get('style_dropout', 0.0)) > 0 else 'tắt'})")
 
     # MẶC ĐỊNH chạy SINGLE-GPU (ổn định — đúng setup đã train tốt 22 epoch).
     # DataParallel chỉ bật khi đặt env USE_DATA_PARALLEL=1, vì combo

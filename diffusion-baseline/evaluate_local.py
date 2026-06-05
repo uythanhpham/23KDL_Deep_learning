@@ -118,7 +118,8 @@ def load_model(device):
             print("✓ Loaded raw state_dict")
 
         if "style_encoder" in ckpt:
-            style_encoder.load_state_dict(ckpt["style_encoder"])
+            # strict=False để tương thích cả checkpoint cũ (chưa có 'null_style' của CFG)
+            style_encoder.load_state_dict(ckpt["style_encoder"], strict=False)
             print("✓ Loaded Style Encoder")
         else:
             print("⚠️ CẢNH BÁO: Không tìm thấy Style Encoder trong checkpoint!")

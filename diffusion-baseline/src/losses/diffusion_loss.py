@@ -49,13 +49,14 @@ class StyleDiffusionLoss(nn.Module):
     chỉ cần .mean() rồi nhân loss_weights ở bên ngoài.
     """
     def __init__(self, model: nn.Module, style_encoder: nn.Module, scheduler: nn.Module,
-                 t_mask_ratio: int = 5, amp_enabled: bool = False):
+                 t_mask_ratio: int = 5, amp_enabled: bool = False, style_dropout: float = 0.0):
         super().__init__()
         self.model = model
         self.style_encoder = style_encoder
         self.scheduler = scheduler
         self.t_mask_ratio = t_mask_ratio      # t < T // t_mask_ratio mới tính perceptual loss
         self.amp_enabled = amp_enabled         # bật autocast NGAY trong forward (an toàn với DataParallel)
+        self.style_dropout = style_dropout     # xác suất thay style_emb bằng null (cho CFG)
 
     def forward(self, x0: torch.Tensor, style: torch.Tensor,
                 t: torch.Tensor, noise: torch.Tensor):
@@ -63,9 +64,21 @@ class StyleDiffusionLoss(nn.Module):
         # của DataParallel (không phụ thuộc autocast ở thread chính).
         with autocast('cuda', enabled=self.amp_enabled):
             T = self.scheduler.num_timesteps
+            B = x0.shape[0]
 
             # 1. Style embedding — KHÔNG no_grad (để MLP nhận gradient)
             style_emb = self.style_encoder.encode_style(style)
+
+            # 1b. STYLE DROPOUT (cho Classifier-Free Guidance):
+            #     thay style_emb của một số mẫu bằng null_style → model học cả nhánh
+            #     có-style lẫn không-style. Mẫu bị drop KHÔNG tính perceptual loss
+            #     (vì lúc đó ta không muốn ép style).
+            if self.style_dropout > 0.0:
+                drop = torch.rand(B, device=x0.device) < self.style_dropout
+                null = self.style_encoder.null_style.to(style_emb.dtype)
+                style_emb = torch.where(drop.unsqueeze(1), null.unsqueeze(0), style_emb)
+            else:
+                drop = torch.zeros(B, dtype=torch.bool, device=x0.device)
 
             # 2. Forward diffusion (dùng noise truyền vào để add_noise nhất quán khi scatter)
             x_t, eps_true = self.scheduler.add_noise(x0, t, noise)
@@ -73,31 +86,31 @@ class StyleDiffusionLoss(nn.Module):
             # 3. UNet dự đoán nhiễu
             eps_pred = self.model(x_t, t, style_emb)
 
-            # 4. Noise loss
+            # 4. Noise loss (tính trên TẤT CẢ mẫu, kể cả mẫu null)
             loss_noise = noise_prediction_loss(eps_pred, eps_true)
 
             # 5. Dự đoán lại x0 (giữ gradient để perceptual loss chảy về UNet)
             x0_pred = self.scheduler.predict_x0(x_t, t, eps_pred)
 
-            # 6+7. Perceptual loss chỉ ở t thấp
-            t_mask = (t < T // self.t_mask_ratio)
+            # 6+7. Perceptual loss: chỉ ở t thấp VÀ mẫu KHÔNG bị drop
+            percep_mask = (t < T // self.t_mask_ratio) & (~drop)
             loss_style = torch.zeros((), device=x0.device)
             loss_content = torch.zeros((), device=x0.device)
 
-            if t_mask.any():
+            if percep_mask.any():
                 # Style loss (Gram matrix)
-                pred_style_in = self.style_encoder._to_vgg_input(x0_pred[t_mask])
+                pred_style_in = self.style_encoder._to_vgg_input(x0_pred[percep_mask])
                 pf = self.style_encoder.vgg(pred_style_in)["style_feats"]
                 with torch.no_grad():
                     tf = self.style_encoder.vgg(
-                        self.style_encoder._to_vgg_input(style[t_mask])
+                        self.style_encoder._to_vgg_input(style[percep_mask])
                     )["style_feats"]
                 loss_style = self.style_encoder.compute_style_loss(pf, tf)
 
                 # Content loss (feature matching)
-                pc = self.style_encoder.encode_content(x0_pred[t_mask])
+                pc = self.style_encoder.encode_content(x0_pred[percep_mask])
                 with torch.no_grad():
-                    tc = self.style_encoder.encode_content(x0[t_mask])
+                    tc = self.style_encoder.encode_content(x0[percep_mask])
                 loss_content = self.style_encoder.compute_content_loss(pc, tc)
 
         # Trả về shape (1,) để DataParallel gather theo dim 0
