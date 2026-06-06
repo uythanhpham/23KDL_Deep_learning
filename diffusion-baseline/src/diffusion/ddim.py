@@ -32,18 +32,29 @@ class DDIMSampler(nn.Module):
         ts = list(reversed(range(0, T, step_ratio)))[:ddim_steps]
         return torch.tensor(ts, dtype=torch.long)
 
-    def _predict_eps(self, model, x, t_batch, style_emb, null_style_emb=None, guidance_scale=1.0):
+    def _predict_eps(self, model, x, t_batch, style_emb, null_style_emb=None,
+                     guidance_scale=1.0, guidance_rescale=0.0):
         """
-        Dự đoán nhiễu, có hỗ trợ Classifier-Free Guidance (CFG).
-        guidance_scale=1.0 (hoặc thiếu null) → chạy 1 lần như thường.
-        guidance_scale>1.0 → chạy 2 lần (style + null) và phóng đại hướng style:
-            eps = eps_null + s * (eps_style - eps_null)
+        Dự đoán nhiễu, có hỗ trợ Classifier-Free Guidance (CFG) + guidance rescale.
+        - guidance_scale=1.0 (hoặc thiếu null) → chạy 1 lần như thường.
+        - guidance_scale>1.0 → chạy 2 lần (style + null), phóng đại hướng style:
+              eps = eps_null + s * (eps_style - eps_null)
+        - guidance_rescale>0 (Lin et al. 2023): co eps về cùng std với nhánh có-style
+          để GIẢM artifact nhiễu hạt/mảng khi guidance cao. ~0.7 là hợp lý.
         """
         if guidance_scale == 1.0 or null_style_emb is None:
             return model(x, t_batch, style_emb)
         eps_style = model(x, t_batch, style_emb)
         eps_null  = model(x, t_batch, null_style_emb)
-        return eps_null + guidance_scale * (eps_style - eps_null)
+        eps_cfg = eps_null + guidance_scale * (eps_style - eps_null)
+
+        if guidance_rescale > 0.0:
+            dims = list(range(1, eps_cfg.ndim))
+            std_cond = eps_style.std(dim=dims, keepdim=True)
+            std_cfg  = eps_cfg.std(dim=dims, keepdim=True)
+            eps_rescaled = eps_cfg * (std_cond / (std_cfg + 1e-8))
+            eps_cfg = guidance_rescale * eps_rescaled + (1.0 - guidance_rescale) * eps_cfg
+        return eps_cfg
 
     def step(self, eps_pred: torch.Tensor, t: int, t_prev: int, x_t: torch.Tensor) -> torch.Tensor:
         """
@@ -83,9 +94,10 @@ class DDIMSampler(nn.Module):
         return x_prev
 
     def sample(self, model: nn.Module, shape: Tuple[int, ...], style_emb: torch.Tensor, device: str,
-               null_style_emb: torch.Tensor = None, guidance_scale: float = 1.0) -> torch.Tensor:
+               null_style_emb: torch.Tensor = None, guidance_scale: float = 1.0,
+               guidance_rescale: float = 0.0) -> torch.Tensor:
         """
-        Vòng lặp lấy mẫu DDIM hoàn chỉnh. Hỗ trợ CFG qua (null_style_emb, guidance_scale).
+        Vòng lặp lấy mẫu DDIM hoàn chỉnh. Hỗ trợ CFG qua (null_style_emb, guidance_scale, guidance_rescale).
         """
         model.eval()
         x = torch.randn(shape, device=device)
@@ -97,7 +109,8 @@ class DDIMSampler(nn.Module):
                 t_batch = torch.full((shape[0],), t_val, device=device, dtype=torch.long)
 
                 # Model dự đoán nhiễu (có thể dùng CFG)
-                eps_pred = self._predict_eps(model, x, t_batch, style_emb, null_style_emb, guidance_scale)
+                eps_pred = self._predict_eps(model, x, t_batch, style_emb, null_style_emb,
+                                             guidance_scale, guidance_rescale)
 
                 # Xác định timestep tiếp theo (đi lùi về 0)
                 t_prev = ts[i + 1] if (i + 1) < len(ts) else -1
@@ -109,7 +122,8 @@ class DDIMSampler(nn.Module):
 
     def sample_img2img(self, model: nn.Module, x0: torch.Tensor, style_emb: torch.Tensor,
                        device: str, strength: float = 0.6,
-                       null_style_emb: torch.Tensor = None, guidance_scale: float = 1.0) -> torch.Tensor:
+                       null_style_emb: torch.Tensor = None, guidance_scale: float = 1.0,
+                       guidance_rescale: float = 0.0) -> torch.Tensor:
         """
         DDIM Img2Img: Thêm nhiễu vào ảnh gốc rồi khử nhiễu bằng DDIM (nhảy cóc).
         Thay vì đi 600 bước DDPM tuần tự, DDIM chỉ cần 30-50 bước.
@@ -140,7 +154,8 @@ class DDIMSampler(nn.Module):
         with torch.no_grad():
             for i, t_val in enumerate(tqdm(ts_sub, desc="DDIM Img2Img")):
                 t_batch = torch.full((x0.shape[0],), t_val, device=device, dtype=torch.long)
-                eps_pred = self._predict_eps(model, x, t_batch, style_emb, null_style_emb, guidance_scale)
+                eps_pred = self._predict_eps(model, x, t_batch, style_emb, null_style_emb,
+                                             guidance_scale, guidance_rescale)
                 
                 # Timestep tiếp theo trong chuỗi con
                 if (i + 1) < len(ts_sub):
