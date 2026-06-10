@@ -35,6 +35,7 @@ def scan_image_files(folder: Path) -> List[Path]:
 def get_transform(image_size: int) -> transforms.Compose:
     return transforms.Compose([
         transforms.Resize((image_size, image_size)),
+        transforms.CenterCrop(image_size),
         transforms.ToTensor(), # Tự động đưa về [0, 1]
         transforms.Normalize(mean=[0.485, 0.456, 0.406], 
                              std=[0.229, 0.224, 0.225]) # Chuẩn hóa theo ImageNet
