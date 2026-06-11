@@ -59,7 +59,13 @@ def main():
     dist = {}
     if args.style_dir:
         print("[*] Tính FID / KID (vs tập Van Gogh)...")
-        dist = M.distribution_metrics(args.pred_dir, args.style_dir, device=device)
+        try:
+            dist = M.distribution_metrics(args.pred_dir, args.style_dir, device=device)
+        except Exception as e:
+            # Không để FID/KID làm hỏng cả lượt chạy (vd thiếu torch-fidelity).
+            # Vẫn ghi summary.json với phần content metrics.
+            print(f"[!] BỎ QUA FID/KID: {type(e).__name__}: {e}")
+            print("    → cài thêm: pip install torch-fidelity   (hoặc torchmetrics[image])")
     else:
         print("[!] Bỏ qua FID/KID (chưa truyền --style_dir).")
 
