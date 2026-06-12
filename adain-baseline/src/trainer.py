@@ -1,9 +1,11 @@
-# 23KDL_Deep_learning/adain-baseline/src/trainer.py
-"""Chạy vòng lặp t_trainrain/validat_traine và lưu checkpoint_train."""
-# ****:
 import torch
-from .models.adain import adain
-from .losses.perceptual import perceptual_loss
+
+try:
+    from .models.adain import adain
+    from .losses.perceptual import perceptual_loss
+except ImportError:
+    from models.adain import adain
+    from losses.perceptual import perceptual_loss
 
 class AdaINTrainer:
     def __init__(self, model, optimizer, lambda_style=10.0, device="cpu"):
