@@ -2,7 +2,6 @@
 
 import argparse
 import csv
-from Model.adain_multiscale import calc_mean_std
 import torch
 import torch.nn as nn
 from torch.optim import Adam
@@ -13,10 +12,10 @@ from pathlib import Path
 #from adain_baseline.src.models.adain import AdaINStyleTransfer
 #from adain_baseline.src.trainer import AdaINTrainer
 
-from .trainer import AdaINTrainer
+from Train.trainer import AdaINTrainer
 from Loss.loss import StyleTransferLoss
 from Model.adain_multiscale import AdaINStyleTransfer, calc_mean_std
-from Data.datasets import build_dataloaders
+from DataSet.DataLoader import build_dataloaders
 
 import torchvision.utils as vutils
 def save_visualization(model, content, style, path, device):
