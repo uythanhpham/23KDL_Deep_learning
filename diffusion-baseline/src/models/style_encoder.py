@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from typing import List, Dict
-from torch.cuda.amp import autocast
 from torch.amp import autocast
 
 def gram_matrix(feat: torch.Tensor) -> torch.Tensor:
