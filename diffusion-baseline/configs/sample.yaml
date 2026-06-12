@@ -1,0 +1,12 @@
+sample:
+  checkpoint: checkpoints/best_model.pth
+  content_path: debug_data/content # Đường dẫn tới ảnh/thư mục ảnh gốc (để mượn cấu trúc)
+  style_path: debug_data/style     # Đường dẫn tới ảnh/thư mục ảnh style (để mượn phong cách)
+  output_dir: outputs/samples
+  image_size: 256                  # Phải khớp với kích thước ảnh lúc huấn luyện
+  mode: content_to_stylized        # Mode: "content_to_stylized" (Img2Img) hoặc "noise_to_stylized" (từ nhiễu thuần)
+  strength: 0.6                    # Mức độ nhiễu thêm vào content (0.0 = giữ nguyên, 1.0 = nhiễu thuần). 0.6 giữ cấu trúc tốt hơn 0.8
+  sampler: ddim
+  ddim_steps: 100
+  seed: 0
+  save_grid: true

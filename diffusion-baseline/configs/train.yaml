@@ -1,0 +1,33 @@
+data:
+  content_dir: debug_data/content # Thư mục chứa ảnh cấu trúc (ảnh gốc cần biến đổi)
+  style_dir: debug_data/style     # Thư mục chứa ảnh phong cách (texture/màu sắc muốn học)
+  image_size: 256
+  batch_size: 2         # hạ từ 4 do OOM trên 1 T4 (15.6GB) ở ranh giới epoch (validation + VGG perceptual 256px)
+  num_workers: 4
+  val_split: 0.1
+
+train:
+  epochs: 30
+  lr: 0.0002
+  grad_clip: 1.0
+  mixed_precision: true
+  ema_decay: 0.9999
+  log_every: 10
+  save_every: 5
+  checkpoint_dir: checkpoints
+  seed: 42
+  style_dropout: 0.15   # PHƯƠNG ÁN B (CFG): xác suất thay style_emb bằng null lúc train.
+                        # 0 = tắt. ~0.10-0.20 để model học nhánh null → inference dùng guidance_scale.
+
+loss_weights:
+  noise: 1.0      # Trọng số cho hàm loss chính của DDPM
+  style: 500.0    # Gram-loss bị chia C*H*W nên RẤT nhỏ (~1e-3 đo được ở smoke test) →
+                  # cần weight lớn (chuẩn style transfer dùng 1e2–1e5). MỤC TIÊU: chỉnh
+                  # sao cho 'style_w' trong log ≈ 0.3–1.0 (cùng cỡ 'noise_w'). Đọc log
+                  # ~50 step đầu rồi tăng/giảm nếu style_w còn quá nhỏ hoặc lấn át noise.
+  content: 0.01   # Giảm: noise_loss vốn đã ép giữ content (content LÀ target denoising),
+                  # content_loss cao chỉ kéo ngược style một cách thừa thãi.
+
+early_stopping:
+  patience: 15
+  min_delta: 0.0001
