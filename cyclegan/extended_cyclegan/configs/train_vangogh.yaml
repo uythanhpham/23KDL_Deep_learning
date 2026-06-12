@@ -1,0 +1,63 @@
+# ==========================================
+# DATA CONFIGURATION (LOCAL ENVIRONMENT)
+# ==========================================
+data:
+  root: "D:/data/processed/cyclegan"
+  style: "vangogh"
+  trainA: "trainA"
+  trainB: "trainB"
+  testA: "testA"
+  testB: "testB"
+  palette_photo: "D:/data/processed/palette_bank/photo/train_palettes_photo.jsonl"
+  palette_art: "D:/data/processed/palette_bank/wikiart/train_palettes_art.jsonl"
+  image_extensions: [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+
+# ==========================================
+# MODEL CONFIGURATION
+# ==========================================
+model:
+  name: "cyclegan_palette"
+  input_nc: 3
+  output_nc: 3
+  ngf: 64            # Số lượng filter của generator layer đầu tiên
+  ndf: 64            # Số lượng filter của discriminator layer đầu tiên
+  netG: "resnet_9blocks" # Kiến trúc Generator cho ảnh 256x256
+  netD: "basic"          # PatchGAN Discriminator thông thường
+  norm: "instance"       # Instance Normalization chuẩn cho CycleGAN
+  init_type: "normal"
+  init_gain: 0.02
+
+# ==========================================
+# LOSS CONFIGURATION
+# ==========================================
+loss:
+  lambda_A: 10.0         # Trọng số Cycle Loss cho Domain A
+  lambda_B: 10.0         # Trọng số Cycle Loss cho Domain B
+  lambda_identity: 0.5   # Hệ số Identity Loss (0.5 * lambda)
+  lambda_palette: 0.05    # Trọng số cho Palette-based Style Transfer Loss
+  pool_size: 50          # Kích thước buffer lưu ảnh cũ để train Discriminator
+
+# ==========================================
+# TRAINING CONFIGURATION (LOCAL SPECIFIC)
+# ==========================================
+train:
+  seed: 42
+  device: "cuda"         # Sử dụng GPU mặc định (cuda:0)
+  image_size: 286        # Resize trước khi crop
+  crop_size: 256         # Kích thước ảnh đầu vào mô hình
+  batch_size: 1          # Khóa cứng ở 1 cho CycleGAN chuẩn
+  num_workers: 2        # Ép về 0 trên Windows để tránh lỗi đa tiến trình (Multi-processing)
+  epochs: 100            # Số epoch giữ nguyên hằng số lr
+  epochs_decay: 100      # Số epoch giảm dần lr về 0
+  max_steps_per_epoch: 0
+  lr: 0.0002
+  beta1: 0.5             # Tham số Adam chuẩn cho GAN
+  beta2: 0.999
+
+# ==========================================
+# OUTPUT CONFIGURATION
+# ==========================================
+output:
+  root: "outputs"
+  save_epoch_freq: 5     # Tần suất lưu checkpoint (mỗi 5 epoch)
+  display_freq: 100      # Tần suất log loss/hÌnh ảnh trên terminal/tensorboard (mỗi 100 batch)

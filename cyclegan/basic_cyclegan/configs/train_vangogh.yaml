@@ -1,0 +1,41 @@
+data:
+  root: "D:/data/processed/cyclegan"
+  style: "vangogh"
+  trainA: "trainA"
+  trainB: "trainB"
+  testA: "testA"
+  testB: "testB"
+  image_extensions: [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+
+model:
+  input_nc: 3
+  output_nc: 3
+  ngf: 64
+  ndf: 64
+  n_res_blocks: 9
+  norm: "instance"
+  no_dropout: true
+  gan_mode: "lsgan"
+
+train:
+  seed: 42
+  device: "auto"
+  image_size: 286
+  crop_size: 256
+  batch_size: 1
+  num_workers: 2
+  epochs: 100
+  epochs_decay: 100
+  lr: 0.0002
+  beta1: 0.5
+  beta2: 0.999
+  lambda_cycle: 10.0
+  lambda_identity: 0.5
+  pool_size: 50
+  use_amp: true
+  save_every_epochs: 5
+  sample_every_epochs: 1
+  max_steps_per_epoch: 0
+
+output:
+  root: "outputs"

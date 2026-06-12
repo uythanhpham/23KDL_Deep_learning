@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+outputs/checkpoints/
+outputs/samples/
+outputs/logs/
+*.pth
+*.pt
+.DS_Store
