@@ -4,9 +4,14 @@ import torch.nn as nn
 from torch.optim import Adam
 from pathlib import Path
 
-from .data.datasets import build_dataloaders
-from .models.adain import AdaINStyleTransfer
-from .trainer import AdaINTrainer
+try:
+    from .data.datasets import build_dataloaders
+    from .models.adain import AdaINStyleTransfer
+    from .trainer import AdaINTrainer
+except ImportError:
+    from data.datasets import build_dataloaders
+    from models.adain import AdaINStyleTransfer
+    from trainer import AdaINTrainer
 
 # ─────────────────────────────────────────────
 # Early Stopping
