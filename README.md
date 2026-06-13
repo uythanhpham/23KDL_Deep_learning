@@ -506,7 +506,7 @@ bash scripts/evaluate_all.sh
 |---|---|---|
 | Phạm Thanh Uy | 23280097 | *(Thực hiện CycleGAN)* |
 | Đặng Đỉnh Đoàn | 23280046 | *(Thực hiện Diffusion)* |
-| Tạ Minh Hoàng Nguyên | 23280000 | *(Thực hiện AdaIN)* |
+| Tạ Minh Hoàng Nguyên | 23280073 | *(Thực hiện AdaIN)* |
 
 **Tài liệu nền tảng:** Gatys et al. (2015) · Huang & Belongie (2017, AdaIN) · Zhu et al.
 (2017, CycleGAN) · Karras et al. (2019, StyleGAN) · Ho et al. (2020, DDPM) · Song et al.
