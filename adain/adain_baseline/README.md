@@ -1,101 +1,78 @@
 # AdaIN Baseline
 
-Hướng dẫn nhanh để train và inference mô hình AdaIN style transfer trong workspace này.
+Hiện thực AdaIN style transfer **chuẩn theo paper gốc** (Huang & Belongie 2017 — *Arbitrary Style Transfer in Real-time with Adaptive Instance Normalization*), làm baseline so sánh với bản cải tiến [adain_multiscale](../adain_multiscale/).
+
+## Kiến trúc
+
+```text
+Content ──► VGG19 Encoder (frozen, đến relu4_1) ──► f(c) ─┐
+Style   ──► VGG19 Encoder (frozen, đến relu4_1) ──► f(s) ─┤
+                                                          ▼
+                          AdaIN: σ(f(s)) · (f(c) − μ(f(c)))/σ(f(c)) + μ(f(s))
+                                                          ▼
+                          Decoder (đối xứng VGG, học từ đầu) ──► ảnh stylized
+```
+
+- **Encoder**: VGG19 pretrained ImageNet, đóng băng — chỉ **decoder được học**.
+- **AdaIN một lần** tại bottleneck (relu4_1): căn mean/std của content feature theo style feature.
+- Inference có tham số `alpha` ∈ [0, 1] trộn feature trước/sau AdaIN để điều chỉnh mức độ style.
+
+## Hàm Loss (`src/losses/perceptual.py`)
+
+$L = L_{content} + \lambda_{style} \cdot L_{style}$ với $\lambda_{style} = 10$ (theo paper):
+
+- **Content loss**: MSE giữa feature của output và feature sau AdaIN (target).
+- **Style loss**: MSE giữa mean/std của output và style trên 4 tầng VGG (relu1_1 → relu4_1).
 
 ## Yêu cầu
 
-- Python 3.10+ khuyến nghị
-- PyTorch
-- torchvision
-- Pillow
-- scikit-image
-- lpips
-- numpy
+Python 3.10+; cài dependency bằng `requirements.txt` ở repo gốc: `pip install -r ../../requirements.txt`
 
-Nếu bạn chưa cài dependencies, hãy cài theo môi trường bạn đang dùng trước khi chạy các lệnh bên dưới.
+Dữ liệu: thư mục gốc chứa 2 thư mục con `content/` và `style/` — chạy `bash scripts/setup_data.sh` ở repo gốc để tạo sẵn tại `data/adain/`.
 
-## Cấu trúc dữ liệu train
+## Cách chạy
 
-Script train dùng `build_dataloaders(...)` từ `src/data/datasets.py`. Dữ liệu đầu vào cần được chuẩn bị theo đúng format mà hàm này mong đợi.
-
-Nếu bạn đang dùng thư mục debug mặc định, `train.py` sẽ đọc từ:
-
-- `adain_baseline/debug_data`
-
-Bạn có thể đổi bằng tham số `--root_dir`.
-
-## Train model
-
-Chạy từ thư mục gốc của project:
+Chạy từ thư mục `adain_baseline/`:
 
 ```bash
-python -m src.train
+# Train (mặc định đọc debug_data — đổi --root_dir sang dữ liệu thật)
+python -m src.train \
+    --root_dir ../../data/adain \
+    --checkpoint_dir checkpoints \
+    --epochs 20 --batch_size 8 --lr 1e-4 --lambda_style 10.0
 ```
 
-Ví dụ với tham số tùy chỉnh:
+Tham số chính: `--image_size` (mặc định 256), `--val_split` (0.2), `--patience`/`--min_delta` (early stopping), `--resume_from` (tiếp tục từ checkpoint).
+
+Kết quả train lưu trong `--checkpoint_dir`: `best_model.pth`, `adain_checkpoint_epoch_*.pth`, `history.csv`.
+
+### Inference
 
 ```bash
-python -m src.train --root_dir adain_baseline/debug_data --checkpoint_dir adain_baseline/checkpoints --epochs 5 --batch_size 8 --lr 1e-4
+python -m src.infer \
+    --checkpoint checkpoints/best_model.pth \
+    --content_dir ../../data/archive/testA \
+    --style_dir ../../data/archive/testB \
+    --output_dir outputs/infer \
+    --alpha 1.0 --size 256 --pair_mode cycle
 ```
 
-### Tham số chính
+- `--pair_mode cycle`: mỗi content ghép 1 style → output 1-1 (`<content>_stylized.jpg`), dùng được ngay cho `scripts/evaluate_all.sh`
+- `--pair_mode all` (mặc định): tích chéo content×style, mỗi cặp tạo file `result_<content>_<style>.jpg` — chỉ dùng với số ảnh nhỏ
+- Checkpoint load được cả dạng full checkpoint lẫn state dict thuần.
 
-- `--root_dir`: thư mục dữ liệu train
-- `--image_size`: kích thước ảnh đầu vào
-- `--batch_size`: batch size
-- `--lr`: learning rate
-- `--lambda_style`: trọng số style loss
-- `--epochs`: số epoch
-- `--val_split`: tỉ lệ validation
-- `--num_workers`: số worker cho dataloader
-- `--checkpoint_dir`: nơi lưu checkpoint
-- `--resume_from`: đường dẫn checkpoint để tiếp tục train
-
-### Kết quả train
-
-Sau khi train, script sẽ lưu:
-
-- `best_model.pth`
-- `adain_checkpoint_epoch_*.pth`
-- `history.csv`
-
-trong thư mục `--checkpoint_dir`.
-
-## Inference
-
-Chạy inference bằng checkpoint đã train:
+### Evaluate
 
 ```bash
-python -m src.infer --checkpoint adain_baseline/checkpoints/best_model.pth --content_dir path/to/content --style_dir path/to/style --output_dir outputs/infer
+python -m src.evaluate \
+    --pred_dir outputs/infer \
+    --ref_dir <thư mục ảnh content gốc> \
+    --output_file outputs/eval/metrics.json
 ```
 
-### Tham số chính
+Đo **LPIPS / SSIM / RMSE** so với ảnh content gốc (mức độ giữ nội dung).
 
-- `--checkpoint`: file checkpoint hoặc state dict
-- `--content_dir`: thư mục ảnh content
-- `--style_dir`: thư mục ảnh style
-- `--output_dir`: thư mục lưu ảnh kết quả
-- `--alpha`: mức trộn content/style
-- `--size`: kích thước ảnh khi inference
+> [!NOTE]
+> Để so sánh công bằng với các model khác trong dự án (FID/KID/CLIP style), chạy thêm bộ evaluate chung tại `diffusion-baseline/src/evaluate.py` trên cùng thư mục output — xem [README gốc](../../README.md).
 
-### Output
-
-Mỗi cặp content/style sẽ tạo một file ảnh trong `--output_dir` với tên dạng:
-
-- `result_<content>_<style>.jpg`
-
-## Lưu ý khi chạy
-
-- Khuyến nghị chạy bằng `python -m src.train` và `python -m src.infer` từ thư mục gốc project.
-- Nếu dùng checkpoint resume, `train.py` sẽ nạp `model_state_dict`, `optimizer_state_dict` và `epoch` từ file checkpoint.
-- `infer.py` hiện dùng model `AdaINStyleTransfer` và sẽ load checkpoint theo cả hai dạng: full checkpoint hoặc state dict thuần.
-
-## Gợi ý kiểm tra nhanh
-
-Nếu bạn muốn xác nhận môi trường trước khi train, hãy kiểm tra:
-
-```bash
-python -c "import torch; print(torch.__version__)"
-```
-
-và đảm bảo các package ở phần Yêu cầu đã sẵn sàng.
+Trên Windows có sẵn script `.bat` trong `scripts/` (`01_prepare_data.bat`, `03_infer.bat`, `04_evaluate.bat`).

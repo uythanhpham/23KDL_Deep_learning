@@ -1,7 +1,7 @@
 sample:
   checkpoint: checkpoints/best_model.pth
-  content_path: debug_data/content # Đường dẫn tới ảnh/thư mục ảnh gốc (để mượn cấu trúc)
-  style_path: debug_data/style     # Đường dẫn tới ảnh/thư mục ảnh style (để mượn phong cách)
+  content_path: ../data/archive/testA # Ảnh/thư mục ảnh gốc (để mượn cấu trúc). Smoke test: debug_data/content
+  style_path: ../data/archive/testB   # Ảnh/thư mục ảnh style (để mượn phong cách). Smoke test: debug_data/style
   output_dir: outputs/samples
   image_size: 256                  # Phải khớp với kích thước ảnh lúc huấn luyện
   mode: content_to_stylized        # Mode: "content_to_stylized" (Img2Img) hoặc "noise_to_stylized" (từ nhiễu thuần)

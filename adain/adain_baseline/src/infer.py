@@ -35,6 +35,8 @@ def main():
     parser.add_argument('--output_dir',   type=str, required=True)
     parser.add_argument('--alpha',        type=float, default=1.0)
     parser.add_argument('--size',         type=int,   default=512)
+    parser.add_argument('--pair_mode',    type=str,   default='all', choices=['all', 'cycle'],
+                        help="all: tích chéo content×style; cycle: 1 style/content (output 1-1, dùng cho scripts/evaluate_all.sh)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -58,12 +60,18 @@ def main():
 
     # 3. Batch inference
     with torch.no_grad():
-        for c_name in contents:
+        for c_idx, c_name in enumerate(contents):
             c_img = transform(
                 Image.open(os.path.join(args.content_dir, c_name)).convert('RGB')
             ).unsqueeze(0).to(device)
 
-            for s_name in styles:
+            # cycle: mỗi content ghép đúng 1 style (lấy dư tuần hoàn) → output 1-1
+            if args.pair_mode == 'cycle':
+                pair_styles = [styles[c_idx % len(styles)]]
+            else:
+                pair_styles = styles
+
+            for s_name in pair_styles:
                 s_img = transform(
                     Image.open(os.path.join(args.style_dir, s_name)).convert('RGB')
                 ).unsqueeze(0).to(device)
@@ -76,7 +84,10 @@ def main():
                 # Clamp để tránh noise (giá trị vượt quá 0-1)
                 #output = torch.clamp(output, 0, 1) bỏ dòng này sau debug
 
-                out_name = f"result_{Path(c_name).stem}_{Path(s_name).stem}.jpg"
+                if args.pair_mode == 'cycle':
+                    out_name = f"{Path(c_name).stem}_stylized.jpg"
+                else:
+                    out_name = f"result_{Path(c_name).stem}_{Path(s_name).stem}.jpg"
                 save_image(output, os.path.join(args.output_dir, out_name), normalize=False)
                 print(f"  -> Đã lưu: {out_name}")
 

@@ -2,14 +2,16 @@
 # DATA CONFIGURATION (LOCAL ENVIRONMENT)
 # ==========================================
 data:
-  root: "D:/data/processed/cyclegan"
+  # Layout: root/<style>/<split>. Chạy scripts/setup_data.sh ở repo gốc để tạo symlink data/cyclegan/vangogh
+  root: "../../data/cyclegan"
   style: "vangogh"
   trainA: "trainA"
   trainB: "trainB"
   testA: "testA"
   testB: "testB"
-  palette_photo: "D:/data/processed/palette_bank/photo/train_palettes_photo.jsonl"
-  palette_art: "D:/data/processed/palette_bank/wikiart/train_palettes_art.jsonl"
+  # Sinh bằng: python -m src.data.build_palette_bank (xem README)
+  palette_photo: "../../data/palette_bank/train_palettes_photo.jsonl"
+  palette_art: "../../data/palette_bank/train_palettes_art.jsonl"
   image_extensions: [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
 
 # ==========================================

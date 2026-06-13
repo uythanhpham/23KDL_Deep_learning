@@ -1,5 +1,6 @@
 data:
-  root: "D:/data/processed/cyclegan"
+  # Layout: root/<style>/<split>. Chạy scripts/setup_data.sh ở repo gốc để tạo symlink data/cyclegan/vangogh
+  root: "../../data/cyclegan"
   style: "vangogh"
   trainA: "trainA"
   trainB: "trainB"

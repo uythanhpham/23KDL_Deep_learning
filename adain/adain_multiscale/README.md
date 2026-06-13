@@ -1,6 +1,25 @@
-# AdaIN Multi-Scale Style Transfer
+# AdaIN Multi-Scale (AdaIN cải tiến)
 
-Project này cài đặt mô hình style transfer dựa trên AdaIN với encoder VGG19 cố định và decoder đa tầng để tiêm style theo nhiều cấp độ feature.
+Bản **cải tiến** của [adain_baseline](../adain_baseline/): thay vì tiêm style một lần duy nhất tại bottleneck, decoder **tiêm style tại 4 cấp độ feature** (multi-scale injection).
+
+## Ý tưởng cải tiến
+
+Phong cách hội họa không chỉ nằm ở feature sâu (bố cục màu tổng thể) mà cả ở feature nông (nét cọ, texture). Baseline chỉ AdaIN tại relu4_1 nên dễ mất chi tiết phong cách tinh. Bản multi-scale căn lại mean/std theo style ở **mỗi giai đoạn upsample** của decoder:
+
+```text
+Content ──► VGG19 Encoder (frozen) ──► h1, h2, h3, h4   (relu1_1 → relu4_1)
+Style   ──► VGG19 Encoder (frozen) ──► (μ, σ) của 4 tầng style
+
+Decoder:  AdaIN(h4, stats₄) → conv → AdaIN(·, stats₃) → conv×4
+          → AdaIN(·, stats₂) → conv×2 → AdaIN(·, stats₁) → conv → ảnh ra
+```
+
+- Encoder VGG19 đóng băng — chỉ **decoder được học** (như baseline).
+- Alpha blending ở **mức ảnh đầu ra**: `out = α · stylized + (1−α) · content`.
+
+## Hàm Loss (`Loss/loss.py`)
+
+`StyleTransferLoss`: $L = L_{content} + \lambda_{style} \cdot L_{style}$ với $\lambda_{style} = 10$ — cùng dạng với baseline (style loss = matching mean/std đa tầng) để so sánh công bằng: khác biệt kết quả đến từ **kiến trúc decoder**, không phải từ loss.
 
 ## Cấu trúc thư mục
 
@@ -9,130 +28,44 @@ Project này cài đặt mô hình style transfer dựa trên AdaIN với encode
 - `Loss/loss.py`: hàm loss cho training
 - `Train/trainer.py`: logic train/validate theo batch
 - `Train/train.py`: pipeline huấn luyện, lưu checkpoint và ảnh mẫu
+- `run_train.py`: entry script huấn luyện (CLI)
+- `infer.py`: entry script inference (CLI)
 
 ## Yêu cầu dữ liệu
 
-Cần chuẩn bị dữ liệu theo cấu trúc sau:
-
-```text
-dataset/
-  content/
-    img1.jpg
-    img2.jpg
-  style/
-    style1.jpg
-    style2.jpg
-```
-
-Ảnh sẽ được resize và normalize theo ImageNet trước khi đưa vào VGG19.
+Thư mục gốc chứa 2 thư mục con `content/` (ảnh thật) và `style/` (tranh Van Gogh). Chạy `bash scripts/setup_data.sh` ở repo gốc để tạo sẵn layout này tại `data/adain/` (symlink tới dataset). Ảnh được resize và normalize theo ImageNet trước khi đưa vào VGG19.
 
 ## Cài đặt
 
-Cài các package cần thiết cho môi trường Python:
-
-```bash
-pip install torch torchvision pillow
-```
-
-Nếu bạn dùng GPU, hãy cài đúng bản `torch`/`torchvision` phù hợp với CUDA trên máy.
+Dùng `requirements.txt` ở repo gốc: `pip install -r ../../requirements.txt`
 
 ## Chạy training
 
-File `Train/train.py` hiện cung cấp hàm `train_pipeline`, nên cách chạy ổn định nhất là tạo một script khởi chạy riêng ở thư mục gốc, ví dụ `run_train.py`.
-
-```python
-import torch
-from Model.adain_multiscale import AdaINStyleTransfer
-from DataSet.DataLoader import build_dataloaders
-from Train.train import train_pipeline
-
-def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    model = AdaINStyleTransfer().to(device)
-    optimizer = torch.optim.Adam(model.decoder.parameters(), lr=1e-4)
-
-    train_loader, val_loader = build_dataloaders(
-        root_dir="dataset",
-        image_size=256,
-        pair_mode="cycle",
-        batch_size=8,
-        val_split=0.2,
-        num_workers=4,
-    )
-
-    train_pipeline(
-        model=model,
-        optimizer=optimizer,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=device,
-        checkpoint_dir="checkpoints",
-        epochs=100,
-        scheduler=None,
-        lambda_style=10.0,
-        lambda_content=1.0,
-        patience=15,
-        min_delta=1e-4,
-        resume_path=None,
-    )
-
-if __name__ == "__main__":
-    main()
-```
-
-Sau đó chạy:
+Chạy từ thư mục `adain_multiscale`:
 
 ```bash
-python run_train.py
+python run_train.py --root_dir ../../data/adain --epochs 100 --batch_size 8
 ```
 
-Kết quả training sẽ được lưu trong thư mục `checkpoints/`:
+Tham số chính: `--lr` (1e-4), `--lambda_style` (10.0), `--lambda_content` (1.0), `--val_split` (0.2), `--pair_mode` (`cycle`/`random`), `--patience`/`--min_delta` (early stopping), `--resume` (train tiếp từ checkpoint).
 
-- `history.csv`: log loss theo epoch
-- `epoch_*.pth`: checkpoint từng epoch
-- `best_model.pth`: model tốt nhất theo validation loss
-- `samples/`: ảnh content/style/result minh họa theo epoch
+Kết quả lưu trong `checkpoints/`: `history.csv`, `epoch_*.pth`, `best_model.pth`, `samples/` (ảnh content/style/result theo epoch).
 
-## Chạy model để sinh ảnh
+## Inference
 
-Model nhận vào 2 tensor ảnh đã normalize theo ImageNet: `content` và `style`, rồi trả về ảnh đã stylize.
-
-Ví dụ inference:
-
-```python
-import torch
-from PIL import Image
-from torchvision import transforms
-from Model.adain_multiscale import AdaINStyleTransfer
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = AdaINStyleTransfer().to(device)
-model.load_state_dict(torch.load("checkpoints/best_model.pth", map_location=device))
-model.eval()
-
-transform = transforms.Compose([
-    transforms.Resize(256),
-    transforms.CenterCrop(256),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-
-content = transform(Image.open("content.jpg").convert("RGB")).unsqueeze(0).to(device)
-style = transform(Image.open("style.jpg").convert("RGB")).unsqueeze(0).to(device)
-
-with torch.no_grad():
-    output = model(content, style, alpha=1.0)
+```bash
+python infer.py --checkpoint checkpoints/best_model.pth \
+    --content_dir ../../data/archive/testA \
+    --style_dir ../../data/archive/testB \
+    --output_dir outputs/infer --alpha 1.0
 ```
 
-Tham số `alpha` dùng để trộn giữa ảnh gốc và ảnh stylize:
+- Mặc định `--pair_mode cycle`: mỗi content ghép 1 style (output 1-1 với content → dùng được ngay cho `scripts/evaluate_all.sh`); `--pair_mode all` để chạy tích chéo content×style.
+- `alpha = 1.0`: style mạnh nhất; `alpha = 0.0`: giữ nguyên content; giá trị giữa: cân bằng.
 
-- `alpha = 1.0`: ưu tiên style mạnh nhất
-- `alpha = 0.0`: giữ nguyên ảnh content
-- giá trị ở giữa: cân bằng giữa content và style
+## Lưu ý
 
-## Lưu ý khi chạy
-
-- Hãy chạy lệnh từ thư mục gốc của project để các import kiểu `Train/...`, `Model/...`, `Loss/...` hoạt động đúng.
-- Mô hình dùng `torchvision.models.vgg19(weights=...)`, nên lần đầu có thể tải weight pretrained từ Internet.
-- Đầu vào của model phải là ảnh RGB đã normalize theo ImageNet.
+- Chạy lệnh từ thư mục gốc project để các import `Train/...`, `Model/...`, `Loss/...` hoạt động đúng.
+- Lần đầu chạy sẽ tải weight VGG19 pretrained từ Internet.
+- Đầu vào model phải là ảnh RGB đã normalize theo ImageNet.
+- Đánh giá thống nhất với các model khác: dùng `diffusion-baseline/src/evaluate.py` — xem [README gốc](../../README.md).

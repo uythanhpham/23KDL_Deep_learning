@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms  # Đã thêm thư viện này để chuẩn hóa
 
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -115,6 +115,51 @@ def build_dataloader(
     num_workers: int = 0,
 ) -> DataLoader:
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+
+def build_dataloaders(
+    root_dir: str,
+    image_size: int = 256,
+    pair_mode: str = "cycle",
+    batch_size: int = 8,
+    val_split: float = 0.2,
+    num_workers: int = 4,
+    seed: int = 42,
+) -> tuple:
+    """Tạo cặp train/val DataLoader từ root_dir chứa 2 thư mục con 'content' và 'style'."""
+    root = Path(root_dir)
+    full_dataset = AdaINDebugDataset(
+        content_dir=str(root / "content"),
+        style_dir=str(root / "style"),
+        transform=get_transform(image_size),
+        seed=seed,
+        pair_mode=pair_mode,
+    )
+
+    val_size = int(len(full_dataset) * val_split)
+    train_size = len(full_dataset) - val_size
+    train_dataset, val_dataset = random_split(
+        full_dataset,
+        [train_size, val_size],
+        generator=torch.Generator().manual_seed(seed),
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=False,
+    )
+    return train_loader, val_loader
 
 def summarize_batch(batch: Dict[str, object]) -> None:
     # (Giữ nguyên logic in thông tin như cũ của bạn)

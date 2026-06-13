@@ -1,0 +1,19 @@
+# Dependency dùng chung cho cả 5 model (AdaIN ×2, CycleGAN ×2, Diffusion)
+# Cài PyTorch bản CUDA phù hợp máy bạn theo hướng dẫn tại https://pytorch.org trước,
+# sau đó: pip install -r requirements.txt
+
+torch
+torchvision
+numpy
+pillow
+pyyaml
+tqdm
+
+# Palette bank (chuyển RGB→LAB) + SSIM trong evaluate của adain_baseline
+scikit-image
+
+# Đánh giá thống nhất (scripts/evaluate_all.sh — lõi: diffusion-baseline/src/eval/metrics.py)
+lpips            # LPIPS (content)
+torchmetrics[image]  # FID / KID (distribution — extra [image] kéo theo torch-fidelity)
+open_clip_torch  # CLIP style score
+timm             # DINOv2 (semantic similarity)

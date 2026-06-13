@@ -1,227 +1,99 @@
-# cyclegan-baseline
+# Palette-guided CycleGAN (CycleGAN cải tiến)
 
-Project này train **CycleGAN truyền thống** theo đúng kịch bản dataset của bạn:
+Bản **cải tiến** của [basic_cyclegan](../basic_cyclegan/): thay vì mỗi style phải train một model riêng và style bị "nướng cứng" vào trọng số, generator được **điều kiện hóa theo bảng màu (palette)** — cho phép điều hướng tông màu đầu ra bằng một vector palette bất kỳ tại inference.
+
+## Ý tưởng chính
 
 ```text
-D:/data/processed/cyclegan/
-  monet/
-    trainA/  # photo/content
-    trainB/  # Monet painting
-    testA/
-    testB/
-  vangogh/
-    trainA/
-    trainB/
-    testA/
-    testB/
-  ukiyoe/
-    trainA/
-    trainB/
-    testA/
-    testB/
-  cezanne/
-    trainA/
-    trainB/
-    testA/
-    testB/
+Palette 24-d ──► MappingNetwork (24→256→512→1024→9216) ──► style vector
+(6 màu LAB + 6 trọng số)                                       │ cắt thành (scale, shift)
+                                                               ▼
+Ảnh vào ──► Encoder ──► 9 × ResnetBlock có AdaIN ──► Decoder ──► Ảnh ra
+            (InstanceNorm thường)  ▲ 2 AdaIN/block   (InstanceNorm thường)
 ```
 
-Trong code này:
+- **MappingNetwork** (`src/models/networks.py`): MLP biến palette 24-d thành style vector 9216-d (= 9 blocks × 2 AdaIN × 2 tham số × 256 kênh), tương tự ý tưởng mapping network của StyleGAN.
+- **AdaIN trong res-blocks**: chỉ phần res-blocks dùng AdaIN theo palette; encoder/decoder giữ InstanceNorm thường để bảo toàn cấu trúc.
+- Generator nhận `(ảnh, palette)`: `G_A2B(photo, palette_target)` → tranh theo tông màu mong muốn; `G_B2A(tranh, palette_photo)` → ảnh thật.
 
-- `A = photo/content domain`
-- `B = style/art domain`
-- `G_A2B = photo -> tranh style`
-- `G_B2A = style -> photo`
-- Train 4 model riêng: `monet`, `vangogh`, `ukiyoe`, `cezanne`
-- Không trộn 4 style vào một `trainB` chung.
+## Palette Bank
 
----
+Mỗi ảnh trong dataset được trích trước **6 màu chủ đạo trong không gian CIELAB + 6 trọng số** → vector 24 chiều, lưu file JSONL (cấu hình tại `data.palette_photo` / `data.palette_art` trong config):
 
-## 1. Cài môi trường
-
-Mở PowerShell/CMD trong folder `cyclegan-baseline`, rồi chạy:
-
-```bat
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+```text
+train_palettes_photo.jsonl   # palette của từng ảnh photo (domain A)
+train_palettes_art.jsonl     # palette của từng tranh (domain B)
 ```
 
-Nếu bạn dùng CUDA, hãy cài PyTorch CUDA theo lệnh phù hợp máy bạn từ trang PyTorch. Sau đó kiểm tra:
+Mỗi sample train trả về: palette của ảnh A, palette của ảnh B, và **một palette art ngẫu nhiên** làm target điều hướng. Ảnh không có palette tương ứng được gán vector 0.
 
-```bat
-python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+Sinh palette bank bằng script trong repo (k-means k=6 trong không gian LAB, chạy từ thư mục `extended_cyclegan`):
+
+```bash
+python -m src.data.build_palette_bank \
+    --input_dir ../../data/archive/trainA \
+    --output_jsonl ../../data/palette_bank/train_palettes_photo.jsonl
+
+python -m src.data.build_palette_bank \
+    --input_dir ../../data/archive/trainB \
+    --output_jsonl ../../data/palette_bank/train_palettes_art.jsonl
 ```
 
----
+Config mặc định đã trỏ tới 2 file trên. Tùy chọn: `--k` (số màu), `--resize`, `--max_pixels` (số pixel sample cho k-means), `--max_images` (smoke test).
 
-## 2. Kiểm tra dataset
+## Hàm Loss
 
-```bat
-scripts\00_check_data.bat
+So với CycleGAN chuẩn (LSGAN + Cycle + Identity), bổ sung **Palette Loss**:
+
+| Loss | Weight | Mục đích |
+|------|--------|----------|
+| Adversarial (LSGAN) | 1.0 | Đánh lừa Discriminator |
+| Cycle Consistency | λ_A = λ_B = 10.0 | Bảo toàn nội dung qua chu trình A→B→A |
+| Identity | 0.5·λ | Ổn định màu khi input đã thuộc domain đích |
+| **Palette (L1)** | **0.05** | Kéo màu trung bình của `fake_B` về anchor màu của palette target |
+
+## Cách chạy
+
+Yêu cầu môi trường như basic_cyclegan (`pip install -r requirements.txt`).
+
+```bash
+# Kiểm tra dataset
+python -m src.inspect_data --root <đường dẫn data root>
+
+# Train Van Gogh (sửa đường dẫn data + palette trong config trước)
+python -m src.train --config configs/train_vangogh.yaml
+
+# Resume
+python -m src.train --config configs/train_vangogh.yaml --resume outputs/checkpoints/vangogh/latest.pth
 ```
 
-Hoặc chạy trực tiếp:
+Trên Windows có sẵn các file `.bat` trong `scripts/` (`train_vangogh.bat`, `infer_vangogh_A2B.bat`, ...).
 
-```bat
-python -m src.inspect_data --root "D:/data/processed/cyclegan"
+### Inference
+
+```bash
+python -m src.infer \
+    --config configs/train_vangogh.yaml \
+    --checkpoint outputs/checkpoints/vangogh/latest.pth \
+    --direction A2B \
+    --input_dir ../../data/archive/testA \
+    --output_dir outputs/inference/vangogh/A2B
 ```
 
-Nếu mọi thứ đúng, bạn sẽ thấy đủ 4 style và 4 split `trainA/trainB/testA/testB`.
+Chọn palette điều hướng:
+- Mặc định: bốc ngẫu nhiên 1 palette từ bank (A2B → bank art, B2A → bank photo) với `--seed 42` cố định để tái lập
+- `--palette_index N`: chọn palette thứ N trong bank (theo thứ tự tên file) — dùng để minh họa "cùng ảnh, khác palette" trong báo cáo
+- `--palette_jsonl <file>`: dùng bank khác với config
 
----
-
-## 3. Train một style
-
-Ví dụ train Monet:
-
-```bat
-scripts\train_monet.bat
-```
-
-Hoặc:
-
-```bat
-python -m src.train --config configs/train_monet.yaml
-```
-
-Các style khác:
-
-```bat
-scripts\train_vangogh.bat
-scripts\train_ukiyoe.bat
-scripts\train_cezanne.bat
-```
-
----
-
-## 4. Train cả 4 style
-
-```bat
-scripts\train_all_4styles.bat
-```
-
-Lưu ý: file này train tuần tự, không train song song. Nếu team bạn có 3 máy, nên chia:
-
-- Máy 1: `monet`
-- Máy 2: `vangogh`
-- Máy 3: `ukiyoe`
-- Sau đó một máy train tiếp `cezanne`
-
----
-
-## 5. Output sau khi train
+## Output
 
 ```text
 outputs/
-  checkpoints/
-    monet/latest.pth
-    vangogh/latest.pth
-    ukiyoe/latest.pth
-    cezanne/latest.pth
-
-  samples/
-    monet/epoch_001.jpg
-    ...
-
-  logs/
-    monet/train_log.csv
+  checkpoints/vangogh/latest.pth
+  samples/vangogh/epoch_XXX.jpg     # real_A→fake_B→rec_A / real_B→fake_A→rec_B
+  logs/vangogh/train_log.csv        # gồm cả cột palette_loss
 ```
 
-Mỗi ảnh sample có 2 hàng:
+## Cấu hình chính (`configs/train_vangogh.yaml`)
 
-```text
-real_A -> fake_B -> rec_A
-real_B -> fake_A -> rec_B
-```
-
----
-
-## 6. Infer photo -> style
-
-Ví dụ Monet:
-
-```bat
-scripts\infer_monet_A2B.bat
-```
-
-Hoặc chạy trực tiếp:
-
-```bat
-python -m src.infer ^
-  --config configs/train_monet.yaml ^
-  --checkpoint outputs\checkpoints\monet\latest.pth ^
-  --direction A2B ^
-  --input_dir "D:\data\processed\cyclegan\monet\testA" ^
-  --output_dir "outputs\inference\monet\A2B" ^
-  --max_images 50
-```
-
----
-
-## 7. Chỉnh config cho GPU yếu như RTX 3050
-
-Config mặc định đã chọn hướng an toàn:
-
-```yaml
-batch_size: 1
-ngf: 32
-ndf: 32
-n_res_blocks: 6
-use_amp: true
-crop_size: 256
-```
-
-Nếu vẫn tràn VRAM:
-
-1. Giữ `batch_size: 1`.
-2. Giảm `crop_size: 192`, `image_size: 224`.
-3. Giữ `ngf/ndf = 32`.
-4. Tắt phần mềm đang chiếm GPU.
-5. Chạy từng style, không train song song.
-
-Nếu GPU mạnh hơn và muốn sát CycleGAN official hơn:
-
-```yaml
-ngf: 64
-ndf: 64
-n_res_blocks: 9
-epochs: 100
-epochs_decay: 100
-```
-
----
-
-## 8. Train debug nhanh
-
-Muốn test pipeline trước, chạy:
-
-```bat
-python -m src.train --config configs/train_monet.yaml --max_steps_per_epoch 50 --epochs 1
-```
-
-Lệnh này chỉ chạy 1 epoch và 50 step để xem code/dataset có ổn không.
-
----
-
-## 9. Resume training
-
-```bat
-python -m src.train ^
-  --config configs/train_monet.yaml ^
-  --resume outputs\checkpoints\monet\latest.pth
-```
-
----
-
-## 10. Ghi chú báo cáo
-
-Project này là **CycleGAN gốc/truyền thống**, chưa thêm palette-guided branch. Dữ liệu vẫn giữ đúng cấu trúc:
-
-- Mỗi style là một model riêng.
-- `trainA` là photo/content.
-- `trainB` là tranh style.
-- `testA/testB` không đưa vào train.
-- Không trộn Monet/Van Gogh/Ukiyo-e/Cezanne vào cùng một domain.
-
-Sau khi baseline này chạy ổn, mới nên mở rộng sang `palette-guided CycleGAN`.
+ngf=ndf=64, ResNet 9 blocks, InstanceNorm, ảnh 286→crop 256, batch_size=1, Adam lr=2e-4 (β₁=0.5), 100 epochs + 100 epochs decay tuyến tính, image pool 50, λ_palette=0.05.

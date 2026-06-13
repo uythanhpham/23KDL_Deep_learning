@@ -1,227 +1,95 @@
-# cyclegan-baseline
+# CycleGAN Baseline
 
-Project này train **CycleGAN truyền thống** theo đúng kịch bản dataset của bạn:
+CycleGAN **truyền thống** (Zhu et al. 2017) cho bài toán chuyển ảnh thật ↔ tranh Van Gogh, làm baseline so sánh với bản cải tiến [extended_cyclegan](../extended_cyclegan/) (palette-guided).
 
-```text
-D:/data/processed/cyclegan/
-  monet/
-    trainA/  # photo/content
-    trainB/  # Monet painting
-    testA/
-    testB/
-  vangogh/
-    trainA/
-    trainB/
-    testA/
-    testB/
-  ukiyoe/
-    trainA/
-    trainB/
-    testA/
-    testB/
-  cezanne/
-    trainA/
-    trainB/
-    testA/
-    testB/
-```
+## Kiến trúc
 
-Trong code này:
+- **2 Generator** ResNet (9 res-blocks, ngf=64): `G_A2B` (photo → tranh Van Gogh) và `G_B2A` (tranh → photo)
+- **2 Discriminator** PatchGAN 70×70 (ndf=64)
+- Instance Normalization, không dropout
+- **Image Pool** (buffer 50 ảnh fake cũ) để ổn định Discriminator
+- Mixed Precision (AMP)
 
-- `A = photo/content domain`
-- `B = style/art domain`
-- `G_A2B = photo -> tranh style`
-- `G_B2A = style -> photo`
-- Train 4 model riêng: `monet`, `vangogh`, `ukiyoe`, `cezanne`
-- Không trộn 4 style vào một `trainB` chung.
+## Hàm Loss
 
----
+| Loss | Weight | Mục đích |
+|------|--------|----------|
+| Adversarial (**LSGAN**) | 1.0 | Generator đánh lừa Discriminator |
+| Cycle Consistency | λ = 10.0 | A→B→A ≈ A và B→A→B ≈ B (bảo toàn nội dung) |
+| Identity | 0.5·λ | G_A2B(B) ≈ B — ổn định màu sắc |
 
-## 1. Cài môi trường
+## Dữ liệu
 
-Mở PowerShell/CMD trong folder `cyclegan-baseline`, rồi chạy:
+Config trỏ tới cấu trúc `root/<style>/trainA|trainB|testA|testB` với:
 
-```bat
-python -m venv .venv
-.venv\Scripts\activate
+- `A` = photo/content (ảnh thật)
+- `B` = style/art (tranh Van Gogh)
+
+Config mặc định trỏ `root: ../../data/cyclegan` — chạy `bash scripts/setup_data.sh` ở repo gốc để tạo layout này (symlink `data/cyclegan/vangogh` → `data/archive`).
+
+Tiền xử lý: Resize 286 → RandomCrop 256 → Normalize [-1, 1].
+
+## Cách chạy
+
+```bash
+# Cài môi trường
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+
+# Kiểm tra dataset
+python -m src.inspect_data --root <data root>
+
+# Train
+python -m src.train --config configs/train_vangogh.yaml
+
+# Smoke test nhanh (1 epoch, 50 step)
+python -m src.train --config configs/train_vangogh.yaml --max_steps_per_epoch 50 --epochs 1
+
+# Resume
+python -m src.train --config configs/train_vangogh.yaml --resume outputs/checkpoints/vangogh/latest.pth
 ```
 
-Nếu bạn dùng CUDA, hãy cài PyTorch CUDA theo lệnh phù hợp máy bạn từ trang PyTorch. Sau đó kiểm tra:
+### Inference (photo → tranh)
 
-```bat
-python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+```bash
+python -m src.infer \
+    --config configs/train_vangogh.yaml \
+    --checkpoint outputs/checkpoints/vangogh/latest.pth \
+    --direction A2B \
+    --input_dir <thư mục ảnh photo> \
+    --output_dir outputs/inference/vangogh/A2B
 ```
 
----
+`--direction B2A` cho chiều ngược lại; `--max_images N` để giới hạn số ảnh (0 = chạy hết).
 
-## 2. Kiểm tra dataset
+### Tạo grid ảnh cho báo cáo
 
-```bat
-scripts\00_check_data.bat
+```bash
+python -m src.make_report_grid --help
 ```
 
-Hoặc chạy trực tiếp:
-
-```bat
-python -m src.inspect_data --root "D:/data/processed/cyclegan"
-```
-
-Nếu mọi thứ đúng, bạn sẽ thấy đủ 4 style và 4 split `trainA/trainB/testA/testB`.
-
----
-
-## 3. Train một style
-
-Ví dụ train Monet:
-
-```bat
-scripts\train_monet.bat
-```
-
-Hoặc:
-
-```bat
-python -m src.train --config configs/train_monet.yaml
-```
-
-Các style khác:
-
-```bat
-scripts\train_vangogh.bat
-scripts\train_ukiyoe.bat
-scripts\train_cezanne.bat
-```
-
----
-
-## 4. Train cả 4 style
-
-```bat
-scripts\train_all_4styles.bat
-```
-
-Lưu ý: file này train tuần tự, không train song song. Nếu team bạn có 3 máy, nên chia:
-
-- Máy 1: `monet`
-- Máy 2: `vangogh`
-- Máy 3: `ukiyoe`
-- Sau đó một máy train tiếp `cezanne`
-
----
-
-## 5. Output sau khi train
+## Output
 
 ```text
 outputs/
-  checkpoints/
-    monet/latest.pth
-    vangogh/latest.pth
-    ukiyoe/latest.pth
-    cezanne/latest.pth
-
-  samples/
-    monet/epoch_001.jpg
-    ...
-
-  logs/
-    monet/train_log.csv
+  checkpoints/vangogh/latest.pth      # + config_used.yaml ghi lại config đã dùng
+  samples/vangogh/epoch_XXX.jpg       # 2 hàng: real_A→fake_B→rec_A / real_B→fake_A→rec_B
+  logs/vangogh/train_log.csv
 ```
 
-Mỗi ảnh sample có 2 hàng:
+## Cấu hình huấn luyện (`configs/train_vangogh.yaml`)
 
-```text
-real_A -> fake_B -> rec_A
-real_B -> fake_A -> rec_B
-```
+| Tham số | Giá trị |
+|---|---|
+| Ảnh | resize 286 → crop 256 |
+| Batch size | 1 (chuẩn CycleGAN) |
+| Optimizer | Adam lr=2e-4, β₁=0.5 |
+| Lịch lr | 100 epochs cố định + 100 epochs decay tuyến tính về 0 |
+| λ_cycle / λ_identity | 10.0 / 0.5 |
+| AMP | bật |
+| Seed | 42 |
 
----
+Nếu GPU yếu (ví dụ RTX 3050) và bị tràn VRAM: giảm `ngf`/`ndf` xuống 32, `n_res_blocks` xuống 6, hoặc `crop_size` xuống 192.
 
-## 6. Infer photo -> style
-
-Ví dụ Monet:
-
-```bat
-scripts\infer_monet_A2B.bat
-```
-
-Hoặc chạy trực tiếp:
-
-```bat
-python -m src.infer ^
-  --config configs/train_monet.yaml ^
-  --checkpoint outputs\checkpoints\monet\latest.pth ^
-  --direction A2B ^
-  --input_dir "D:\data\processed\cyclegan\monet\testA" ^
-  --output_dir "outputs\inference\monet\A2B" ^
-  --max_images 50
-```
-
----
-
-## 7. Chỉnh config cho GPU yếu như RTX 3050
-
-Config mặc định đã chọn hướng an toàn:
-
-```yaml
-batch_size: 1
-ngf: 32
-ndf: 32
-n_res_blocks: 6
-use_amp: true
-crop_size: 256
-```
-
-Nếu vẫn tràn VRAM:
-
-1. Giữ `batch_size: 1`.
-2. Giảm `crop_size: 192`, `image_size: 224`.
-3. Giữ `ngf/ndf = 32`.
-4. Tắt phần mềm đang chiếm GPU.
-5. Chạy từng style, không train song song.
-
-Nếu GPU mạnh hơn và muốn sát CycleGAN official hơn:
-
-```yaml
-ngf: 64
-ndf: 64
-n_res_blocks: 9
-epochs: 100
-epochs_decay: 100
-```
-
----
-
-## 8. Train debug nhanh
-
-Muốn test pipeline trước, chạy:
-
-```bat
-python -m src.train --config configs/train_monet.yaml --max_steps_per_epoch 50 --epochs 1
-```
-
-Lệnh này chỉ chạy 1 epoch và 50 step để xem code/dataset có ổn không.
-
----
-
-## 9. Resume training
-
-```bat
-python -m src.train ^
-  --config configs/train_monet.yaml ^
-  --resume outputs\checkpoints\monet\latest.pth
-```
-
----
-
-## 10. Ghi chú báo cáo
-
-Project này là **CycleGAN gốc/truyền thống**, chưa thêm palette-guided branch. Dữ liệu vẫn giữ đúng cấu trúc:
-
-- Mỗi style là một model riêng.
-- `trainA` là photo/content.
-- `trainB` là tranh style.
-- `testA/testB` không đưa vào train.
-- Không trộn Monet/Van Gogh/Ukiyo-e/Cezanne vào cùng một domain.
-
-Sau khi baseline này chạy ổn, mới nên mở rộng sang `palette-guided CycleGAN`.
+> [!NOTE]
+> Code data/config hỗ trợ nhiều style (monet, ukiyoe, cezanne...) theo cấu trúc `root/<style>/`, nhưng phạm vi dự án này chỉ train **vangogh** (config duy nhất trong `configs/`).

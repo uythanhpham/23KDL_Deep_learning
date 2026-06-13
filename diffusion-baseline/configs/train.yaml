@@ -1,6 +1,6 @@
 data:
-  content_dir: debug_data/content # Thư mục chứa ảnh cấu trúc (ảnh gốc cần biến đổi)
-  style_dir: debug_data/style     # Thư mục chứa ảnh phong cách (texture/màu sắc muốn học)
+  content_dir: ../data/archive/trainA # Ảnh thật/photo (ảnh gốc cần biến đổi). Smoke test: debug_data/content
+  style_dir: ../data/archive/trainB   # Tranh Van Gogh (phong cách muốn học). Smoke test: debug_data/style
   image_size: 256
   batch_size: 2         # hạ từ 4 do OOM trên 1 T4 (15.6GB) ở ranh giới epoch (validation + VGG perceptual 256px)
   num_workers: 4
