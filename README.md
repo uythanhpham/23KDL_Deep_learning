@@ -86,3 +86,10 @@ PyTorch · torchvision · VGG19 (perceptual/encoder) · AMP Mixed Precision · E
 ## Báo cáo
 
 Dàn ý chi tiết của báo cáo: [bao_cao_structure.md](bao_cao_structure.md)
+
+
+| Model type | Link to model |
+|--------|-------|
+|AdaIN|https://drive.google.com/drive/u/0/folders/1-iy75YIsNDqAvMT1GMJj6zQtD2LmFHnK|
+|Cycle GAN|...|
+|Diffusion|...|
